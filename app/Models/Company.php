@@ -113,6 +113,11 @@ class Company extends Model
         return $this->hasMany(VoidedDocument::class);
     }
 
+    public function notificaciones(): HasMany
+    {
+        return $this->hasMany(Notificacion::class);
+    }
+
     public function getEndpointAttribute(): string
     {
         return $this->modo_produccion ? $this->endpoint_produccion : $this->endpoint_beta;

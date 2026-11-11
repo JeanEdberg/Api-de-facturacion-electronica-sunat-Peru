@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\ConsultaCpeController;
 use App\Http\Controllers\Api\SetupController;
 use App\Http\Controllers\Api\UbigeoController;
 use App\Http\Controllers\Api\TipoCambioController;
+use App\Http\Controllers\Api\NotificacionController;
 
 // ========================
 // RUTAS PÚBLICAS (SIN AUTENTICACIÓN)
@@ -157,6 +158,16 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/download-cdr', [BoletaController::class, 'downloadCdr']);
         Route::get('/{id}/download-pdf', [BoletaController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [BoletaController::class, 'generatePdf']);
+    });
+
+    // ========================
+    // BUZÓN ELECTRÓNICO SUNAT / SUNAFIL
+    // ========================
+    Route::prefix('notificaciones')->group(function () {
+        Route::get('/', [NotificacionController::class, 'index']);
+        Route::post('/', [NotificacionController::class, 'store']);
+        Route::post('/sincronizar', [NotificacionController::class, 'sincronizar']);
+        Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
     });
 
     // ========================
