@@ -64,6 +64,12 @@ class CompraService
 
         $total = (float) ($doc->children($cac)->LegalMonetaryTotal?->children($cbc)->PayableAmount ?? 0);
 
+        // En el UBL peruano la base de cada tributo va en TaxSubtotal (no en
+        // LegalMonetaryTotal), así que se acumula base e impuesto por código de
+        // tributo: 1000 IGV, 9997 exonerado, 9998 inafecto, 9995/9996 exportación,
+        // 2000 ISC, 7152 ICBPER.
+        [$bases, $tributos] = $this->acumularTributos($doc, $cac, $cbc);
+
         return array_filter([
             'tipo_documento' => $this->tipoDocumento((string) $doc->children($cbc)->InvoiceTypeCode),
             'serie' => $serie,
@@ -75,13 +81,14 @@ class CompraService
             'proveedor_tipo_doc' => $tipoDoc !== '' ? $tipoDoc : '6',
             'proveedor_num_doc' => $numDoc,
             'proveedor_razon_social' => $razon,
-            'mto_oper_gravadas' => $this->monto($doc, $cac, $cbc, 'TotalTaxableAmount', 'LineExtensionAmount'),
-            'mto_oper_exoneradas' => $this->monto($doc, $cac, $cbc, 'TotalExoneratedAmount'),
-            'mto_oper_inafectas' => $this->monto($doc, $cac, $cbc, 'TotalUnaffectedAmount'),
-            'mto_oper_exportacion' => $this->monto($doc, $cac, $cbc, 'TotalExportationAmount'),
-            'mto_igv' => $this->totalImpuesto($doc, $cac, $cbc, '1000', 'VAT'),
-            'mto_isc' => $this->totalImpuesto($doc, $cac, $cbc, null, 'ISC'),
-            'mto_icbper' => $this->totalImpuesto($doc, $cac, $cbc, '7152', 'OTH'),
+            'mto_oper_gravadas' => $bases['1000'] ?? 0.0,
+            'mto_oper_exoneradas' => $bases['9997'] ?? 0.0,
+            'mto_oper_inafectas' => $bases['9998'] ?? 0.0,
+            'mto_oper_exportacion' => round(($bases['9995'] ?? 0.0) + ($bases['9996'] ?? 0.0), 2),
+            'mto_igv' => $tributos['1000'] ?? 0.0,
+            'mto_isc' => $tributos['2000'] ?? 0.0,
+            'mto_icbper' => $tributos['7152'] ?? 0.0,
+            'mto_otros_tributos' => $this->otrosTributos($tributos),
             'mto_imp_venta' => $total,
         ], fn ($v) => $v !== null && $v !== '');
     }
@@ -115,47 +122,45 @@ class CompraService
     }
 
     /**
-     * @param  \SimpleXMLElement  $doc
-     */
-    protected function monto($doc, string $cac, string $cbc, string $tag, ?string $fallback = null): float
-    {
-        $total = $doc->children($cac)->LegalMonetaryTotal;
-        if ($total === null) {
-            return 0.0;
-        }
-
-        $valor = (string) $total->children($cbc)->{$tag};
-        if ($valor === '' && $fallback !== null) {
-            $valor = (string) $total->children($cbc)->{$fallback};
-        }
-
-        return round((float) $valor, 2);
-    }
-
-    /**
-     * Suma los impuestos del comprobante por código de tributo o tipo.
+     * Acumula base imponible e impuesto por código de tributo del comprobante.
      *
      * @param  \SimpleXMLElement  $doc
+     * @return array{0: array<string,float>, 1: array<string,float>}
      */
-    protected function totalImpuesto($doc, string $cac, string $cbc, ?string $codigo, ?string $tipo): float
+    protected function acumularTributos($doc, string $cac, string $cbc): array
     {
-        $suma = 0.0;
+        $bases = [];
+        $tributos = [];
 
         foreach ($doc->children($cac)->TaxTotal ?? [] as $taxTotal) {
             foreach ($taxTotal->children($cac)->TaxSubtotal ?? [] as $subtotal) {
                 $categoria = $subtotal->children($cac)->TaxCategory;
                 $scheme = $categoria?->children($cac)->TaxScheme;
                 $id = (string) ($scheme?->children($cbc)->ID ?? '');
-                $name = (string) ($scheme?->children($cbc)->Name ?? '');
-
-                if ($codigo !== null && $id !== $codigo) {
-                    continue;
-                }
-                if ($codigo === null && $tipo !== null && ! str_contains(strtoupper($name), strtoupper($tipo))) {
+                if ($id === '') {
                     continue;
                 }
 
-                $suma += (float) $subtotal->children($cbc)->TaxAmount;
+                $bases[$id] = round(($bases[$id] ?? 0.0) + (float) $subtotal->children($cbc)->TaxableAmount, 2);
+                $tributos[$id] = round(($tributos[$id] ?? 0.0) + (float) $subtotal->children($cbc)->TaxAmount, 2);
+            }
+        }
+
+        return [$bases, $tributos];
+    }
+
+    /**
+     * Suma los tributos distintos del IGV/ISC/ICBPER ya reportados aparte.
+     *
+     * @param  array<string,float>  $tributos
+     */
+    protected function otrosTributos(array $tributos): float
+    {
+        $conocidos = ['1000', '2000', '7152'];
+        $suma = 0.0;
+        foreach ($tributos as $codigo => $monto) {
+            if (! in_array($codigo, $conocidos, true)) {
+                $suma += $monto;
             }
         }
 

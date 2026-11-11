@@ -38,6 +38,7 @@ function xmlProveedor(): string
   <cac:TaxTotal>
     <cbc:TaxAmount>144.00</cbc:TaxAmount>
     <cac:TaxSubtotal>
+      <cbc:TaxableAmount>800.00</cbc:TaxableAmount>
       <cbc:TaxAmount>144.00</cbc:TaxAmount>
       <cac:TaxCategory>
         <cac:TaxScheme>
@@ -79,6 +80,24 @@ test('parsea un XML UBL de factura de proveedor', function () {
     expect((float) $datos['mto_igv'])->toBe(144.0);
     expect((float) $datos['mto_imp_venta'])->toBe(944.0);
     expect((float) $datos['tipo_cambio'])->toBe(3.75);
+});
+
+test('clasifica la base por código de tributo (IGV y exonerado)', function () {
+    // Añade un segundo subtotal exonerado (código 9997) al XML de proveedor.
+    $exonerado = <<<'SUB'
+    <cac:TaxSubtotal>
+      <cbc:TaxableAmount>200.00</cbc:TaxableAmount>
+      <cbc:TaxAmount>0.00</cbc:TaxAmount>
+      <cac:TaxCategory><cac:TaxScheme><cbc:ID>9997</cbc:ID><cbc:Name>EXO</cbc:Name></cac:TaxScheme></cac:TaxCategory>
+    </cac:TaxSubtotal>
+SUB;
+    $xml = str_replace('</cac:TaxTotal>', $exonerado . '</cac:TaxTotal>', xmlProveedor());
+
+    $datos = (new CompraService)->parsearXml($xml);
+
+    expect((float) $datos['mto_oper_gravadas'])->toBe(800.0);
+    expect((float) $datos['mto_oper_exoneradas'])->toBe(200.0);
+    expect((float) $datos['mto_igv'])->toBe(144.0);
 });
 
 test('rechaza un XML que no es un comprobante', function () {
