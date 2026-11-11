@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Traits\HandlesDocumentDownloads;
 use App\Http\Controllers\Traits\HandlesPdfGeneration;
+use App\Http\Controllers\Traits\SendsToSunat;
 use App\Http\Requests\Boleta\CreateDailySummaryRequest;
 use App\Http\Requests\Boleta\GetBoletasPendingRequest;
 use App\Http\Requests\Boleta\IndexBoletaRequest;
@@ -19,7 +21,9 @@ use Symfony\Component\HttpFoundation\Response;
 
 class BoletaController extends Controller
 {
+    use HandlesDocumentDownloads;
     use HandlesPdfGeneration;
+    use SendsToSunat;
 
     protected DocumentService $documentService;
     protected FileService $fileService;
@@ -95,90 +99,37 @@ class BoletaController extends Controller
      */
     public function sendToSunat(string $id): JsonResponse
     {
-        try {
-            $boleta = Boleta::with(['company', 'branch', 'client'])->findOrFail($id);
-            
-            if ($boleta->estado_sunat === 'ACEPTADO') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'La boleta ya fue aceptada por SUNAT'
-                ], 400);
-            }
+        $boleta = Boleta::with(['company', 'branch', 'client'])->findOrFail($id);
 
-            $result = $this->documentService->sendToSunat($boleta, 'boleta');
-            
-            if ($result['success']) {
-                return response()->json([
-                    'success' => true,
-                    'data' => $result['document']->load(['company', 'branch', 'client']),
-                    'message' => 'Boleta enviada exitosamente a SUNAT'
-                ]);
-            }
-
-            return $this->handleSunatError($result);
-
-        } catch (Exception $e) {
-            return $this->errorResponse('Error interno al enviar a SUNAT', $e);
-        }
+        return $this->sendDocumentToSunat(
+            $boleta,
+            'Boleta',
+            fn (DocumentService $service, $document) => $service->sendToSunat($document, 'boleta')
+        );
     }
 
     /**
      * Descargar XML de boleta
      */
-    public function downloadXml(string $id): Response
+    public function downloadXml(string $id)
     {
-        try {
-            $boleta = Boleta::findOrFail($id);
-            
-            if (!$this->fileService->fileExists($boleta->xml_path)) {
-                return $this->notFoundResponse('XML no encontrado');
-            }
-
-            return $this->fileService->downloadFile(
-                $boleta->xml_path,
-                $boleta->numero_completo . '.xml',
-                ['Content-Type' => 'application/xml']
-            );
-
-        } catch (Exception $e) {
-            return $this->errorResponse('Error al descargar XML', $e);
-        }
+        return $this->downloadDocumentXml(Boleta::findOrFail($id));
     }
 
     /**
      * Descargar CDR de boleta
      */
-    public function downloadCdr(string $id): Response
+    public function downloadCdr(string $id)
     {
-        try {
-            $boleta = Boleta::findOrFail($id);
-            
-            if (!$this->fileService->fileExists($boleta->cdr_path)) {
-                return $this->notFoundResponse('CDR no encontrado');
-            }
-
-            return $this->fileService->downloadFile(
-                $boleta->cdr_path,
-                'R-' . $boleta->numero_completo . '.zip',
-                ['Content-Type' => 'application/zip']
-            );
-
-        } catch (Exception $e) {
-            return $this->errorResponse('Error al descargar CDR', $e);
-        }
+        return $this->downloadDocumentCdr(Boleta::findOrFail($id));
     }
 
     /**
      * Descargar PDF de boleta
      */
-    public function downloadPdf(string $id, Request $request): Response
+    public function downloadPdf(string $id, Request $request)
     {
-        try {
-            $boleta = Boleta::findOrFail($id);
-            return $this->downloadDocumentPdf($boleta, $request);
-        } catch (Exception $e) {
-            return $this->errorResponse('Error al descargar PDF', $e);
-        }
+        return $this->downloadDocumentStoredPdf(Boleta::findOrFail($id), $request->get('format', 'A4'));
     }
 
     /**
@@ -340,28 +291,6 @@ class BoletaController extends Controller
             ->where('estado_sunat', 'PENDIENTE')
             ->whereNull('daily_summary_id')
             ->get();
-    }
-
-    /**
-     * Manejar error de SUNAT
-     */
-    private function handleSunatError(array $result): JsonResponse
-    {
-        $error = $result['error'];
-        $errorCode = 'UNKNOWN';
-        $errorMessage = 'Error desconocido';
-
-        if (is_object($error)) {
-            $errorCode = method_exists($error, 'getCode') ? $error->getCode() : ($error->code ?? $errorCode);
-            $errorMessage = method_exists($error, 'getMessage') ? $error->getMessage() : ($error->message ?? $errorMessage);
-        }
-
-        return response()->json([
-            'success' => false,
-            'data' => $result['document'],
-            'message' => 'Error al enviar a SUNAT: ' . $errorMessage,
-            'error_code' => $errorCode
-        ], 400);
     }
 
     /**

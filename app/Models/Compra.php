@@ -37,6 +37,8 @@ class Compra extends Model
         'mto_imp_venta',
         'estado_sunat',
         'xml_path',
+        'cdr_path',
+        'pdf_path',
         'observacion',
     ];
 

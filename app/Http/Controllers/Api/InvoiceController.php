@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Traits\HandlesDocumentDownloads;
 use App\Http\Controllers\Traits\HandlesPdfGeneration;
+use App\Http\Controllers\Traits\SendsToSunat;
 use App\Services\DocumentService;
 use App\Services\FileService;
 use App\Models\Invoice;
@@ -14,7 +16,10 @@ use Illuminate\Http\JsonResponse;
 
 class InvoiceController extends Controller
 {
+    use HandlesDocumentDownloads;
     use HandlesPdfGeneration;
+    use SendsToSunat;
+
     protected $documentService;
     protected $fileService;
 
@@ -113,115 +118,30 @@ class InvoiceController extends Controller
 
     public function sendToSunat($id): JsonResponse
     {
-        try {
-            $invoice = Invoice::with(['company', 'branch', 'client'])->findOrFail($id);
+        $invoice = Invoice::with(['company', 'branch', 'client'])->findOrFail($id);
 
-            if ($invoice->estado_sunat === 'ACEPTADO') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'La factura ya fue enviada y aceptada por SUNAT'
-                ], 400);
-            }
-
-            $result = $this->documentService->sendToSunat($invoice, 'invoice');
-
-            if ($result['success']) {
-                return response()->json([
-                    'success' => true,
-                    'data' => $result['document'],
-                    'message' => 'Factura enviada correctamente a SUNAT'
-                ]);
-            } else {
-                // Manejar diferentes tipos de error
-                $errorCode = 'UNKNOWN';
-                $errorMessage = 'Error desconocido';
-                
-                if (is_object($result['error'])) {
-                    if (method_exists($result['error'], 'getCode')) {
-                        $errorCode = $result['error']->getCode();
-                    } elseif (property_exists($result['error'], 'code')) {
-                        $errorCode = $result['error']->code;
-                    }
-                    
-                    if (method_exists($result['error'], 'getMessage')) {
-                        $errorMessage = $result['error']->getMessage();
-                    } elseif (property_exists($result['error'], 'message')) {
-                        $errorMessage = $result['error']->message;
-                    }
-                }
-                
-                return response()->json([
-                    'success' => false,
-                    'data' => $result['document'],
-                    'message' => 'Error al enviar a SUNAT: ' . $errorMessage,
-                    'error_code' => $errorCode
-                ], 400);
-            }
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al procesar el envío a SUNAT',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+        return $this->sendDocumentToSunat(
+            $invoice,
+            'Factura',
+            fn (DocumentService $service, $document) => $service->sendToSunat($document, 'invoice')
+        );
     }
 
     public function downloadXml($id)
     {
-        try {
-            $invoice = Invoice::findOrFail($id);
-            
-            $download = $this->fileService->downloadXml($invoice);
-            
-            if (!$download) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'XML no encontrado'
-                ], 404);
-            }
-            
-            return $download;
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al descargar XML',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+        return $this->downloadDocumentXml(Invoice::findOrFail($id));
     }
 
     public function downloadCdr($id)
     {
-        try {
-            $invoice = Invoice::findOrFail($id);
-            
-            $download = $this->fileService->downloadCdr($invoice);
-            
-            if (!$download) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'CDR no encontrado'
-                ], 404);
-            }
-            
-            return $download;
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al descargar CDR',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+        return $this->downloadDocumentCdr(Invoice::findOrFail($id));
     }
 
     public function downloadPdf($id, Request $request)
     {
-        $invoice = Invoice::findOrFail($id);
-        return $this->downloadDocumentPdf($invoice, $request);
+        return $this->downloadDocumentStoredPdf(Invoice::findOrFail($id), $request->get('format', 'A4'));
     }
+
 
     public function generatePdf($id, Request $request)
     {

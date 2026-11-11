@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Traits\HandlesDocumentDownloads;
+use App\Http\Controllers\Traits\SendsToSunat;
 use App\Http\Requests\IndexCreditNoteRequest;
 use App\Http\Requests\StoreCreditNoteRequest;
 use App\Models\CreditNote;
@@ -15,6 +17,9 @@ use Illuminate\Support\Facades\Storage;
 
 class CreditNoteController extends Controller
 {
+    use HandlesDocumentDownloads;
+    use SendsToSunat;
+
     public function __construct(
         private DocumentService $documentService,
         private PdfService $pdfService,
@@ -139,5 +144,31 @@ class CreditNoteController extends Controller
                 'error' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function sendToSunat($id): JsonResponse
+    {
+        $nota = CreditNote::with(['company', 'branch', 'client'])->findOrFail($id);
+
+        return $this->sendDocumentToSunat(
+            $nota,
+            'Nota de crédito',
+            fn (DocumentService $service, $document) => $service->sendToSunat($document, 'credit_note')
+        );
+    }
+
+    public function downloadXml($id)
+    {
+        return $this->downloadDocumentXml(CreditNote::findOrFail($id));
+    }
+
+    public function downloadCdr($id)
+    {
+        return $this->downloadDocumentCdr(CreditNote::findOrFail($id));
+    }
+
+    public function downloadPdf($id, Request $request)
+    {
+        return $this->downloadDocumentStoredPdf(CreditNote::findOrFail($id), $request->get('format', 'A4'));
     }
 }

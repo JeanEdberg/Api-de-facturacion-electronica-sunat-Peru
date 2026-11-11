@@ -17,6 +17,8 @@ use App\Http\Controllers\Api\UbigeoController;
 use App\Http\Controllers\Api\TipoCambioController;
 use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\CompraController;
+use App\Http\Controllers\Api\BulkDocumentController;
+use App\Http\Controllers\Api\SireController;
 use App\Http\Controllers\Api\CreditNoteController;
 use App\Http\Controllers\Api\DebitNoteController;
 use App\Http\Controllers\Api\DispatchGuideController;
@@ -174,6 +176,9 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::post('/importar-xml', [CompraController::class, 'importarXml']);
         Route::get('/{id}', [CompraController::class, 'show']);
         Route::delete('/{id}', [CompraController::class, 'destroy']);
+        Route::get('/{id}/download-{formato}', [CompraController::class, 'download'])
+            ->whereIn('formato', ['xml', 'cdr', 'pdf']);
+        Route::post('/{id}/adjuntos', [CompraController::class, 'subirAdjunto']);
     });
 
     // ========================
@@ -207,6 +212,22 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     });
 
     // ========================
+    // CARGA MASIVA DE COMPROBANTES
+    // ========================
+    Route::prefix('bulk')->group(function () {
+        Route::post('/documentos', [BulkDocumentController::class, 'store']);
+        Route::get('/plantilla', [BulkDocumentController::class, 'plantilla']);
+    });
+
+    // ========================
+    // PROPUESTA SIRE (RVIE / RCE)
+    // ========================
+    Route::prefix('sire')->group(function () {
+        Route::get('/ventas', [SireController::class, 'ventas']);
+        Route::get('/compras', [SireController::class, 'compras']);
+    });
+
+    // ========================
     // NOTAS DE CRÉDITO
     // ========================
     Route::prefix('credit-notes')->group(function () {
@@ -214,7 +235,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [CreditNoteController::class, 'index']);
         Route::post('/', [CreditNoteController::class, 'store']);
         Route::get('/{id}', [CreditNoteController::class, 'show']);
+        Route::post('/{id}/send-sunat', [CreditNoteController::class, 'sendToSunat']);
         Route::post('/{id}/generate-pdf', [CreditNoteController::class, 'generatePdf']);
+        Route::get('/{id}/download-xml', [CreditNoteController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [CreditNoteController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [CreditNoteController::class, 'downloadPdf']);
     });
 
     // ========================
@@ -225,7 +250,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [DebitNoteController::class, 'index']);
         Route::post('/', [DebitNoteController::class, 'store']);
         Route::get('/{id}', [DebitNoteController::class, 'show']);
+        Route::post('/{id}/send-sunat', [DebitNoteController::class, 'sendToSunat']);
         Route::post('/{id}/generate-pdf', [DebitNoteController::class, 'generatePdf']);
+        Route::get('/{id}/download-xml', [DebitNoteController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DebitNoteController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DebitNoteController::class, 'downloadPdf']);
     });
 
     // ========================
@@ -237,7 +266,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [DispatchGuideController::class, 'index']);
         Route::post('/', [DispatchGuideController::class, 'store']);
         Route::get('/{id}', [DispatchGuideController::class, 'show']);
+        Route::post('/{id}/send-sunat', [DispatchGuideController::class, 'sendToSunat']);
         Route::post('/{id}/generate-pdf', [DispatchGuideController::class, 'generatePdf']);
+        Route::get('/{id}/download-xml', [DispatchGuideController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DispatchGuideController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DispatchGuideController::class, 'downloadPdf']);
     });
 
     // ========================

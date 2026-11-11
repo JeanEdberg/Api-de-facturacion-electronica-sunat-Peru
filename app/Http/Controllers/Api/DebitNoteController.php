@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Traits\HandlesDocumentDownloads;
+use App\Http\Controllers\Traits\SendsToSunat;
 use App\Http\Requests\IndexDebitNoteRequest;
 use App\Http\Requests\StoreDebitNoteRequest;
 use App\Models\DebitNote;
@@ -15,6 +17,9 @@ use Illuminate\Support\Facades\Storage;
 
 class DebitNoteController extends Controller
 {
+    use HandlesDocumentDownloads;
+    use SendsToSunat;
+
     public function __construct(
         private DocumentService $documentService,
         private PdfService $pdfService,
@@ -139,5 +144,31 @@ class DebitNoteController extends Controller
                 'error' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function sendToSunat($id): JsonResponse
+    {
+        $nota = DebitNote::with(['company', 'branch', 'client'])->findOrFail($id);
+
+        return $this->sendDocumentToSunat(
+            $nota,
+            'Nota de débito',
+            fn (DocumentService $service, $document) => $service->sendToSunat($document, 'debit_note')
+        );
+    }
+
+    public function downloadXml($id)
+    {
+        return $this->downloadDocumentXml(DebitNote::findOrFail($id));
+    }
+
+    public function downloadCdr($id)
+    {
+        return $this->downloadDocumentCdr(DebitNote::findOrFail($id));
+    }
+
+    public function downloadPdf($id, Request $request)
+    {
+        return $this->downloadDocumentStoredPdf(DebitNote::findOrFail($id), $request->get('format', 'A4'));
     }
 }

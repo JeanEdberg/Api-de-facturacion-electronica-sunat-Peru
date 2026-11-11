@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Traits\HandlesDocumentDownloads;
+use App\Http\Controllers\Traits\SendsToSunat;
 use App\Http\Requests\IndexDispatchGuideRequest;
 use App\Http\Requests\StoreDispatchGuideRequest;
 use App\Models\DispatchGuide;
@@ -15,6 +17,9 @@ use Illuminate\Support\Facades\Storage;
 
 class DispatchGuideController extends Controller
 {
+    use HandlesDocumentDownloads;
+    use SendsToSunat;
+
     public function __construct(
         private DocumentService $documentService,
         private PdfService $pdfService,
@@ -158,5 +163,31 @@ class DispatchGuideController extends Controller
                 'error' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function sendToSunat($id): JsonResponse
+    {
+        $guia = DispatchGuide::with(['company', 'branch', 'destinatario'])->findOrFail($id);
+
+        return $this->sendDocumentToSunat(
+            $guia,
+            'Guía de remisión',
+            fn (DocumentService $service, $document) => $service->sendDispatchGuideToSunat($document)
+        );
+    }
+
+    public function downloadXml($id)
+    {
+        return $this->downloadDocumentXml(DispatchGuide::findOrFail($id));
+    }
+
+    public function downloadCdr($id)
+    {
+        return $this->downloadDocumentCdr(DispatchGuide::findOrFail($id));
+    }
+
+    public function downloadPdf($id, Request $request)
+    {
+        return $this->downloadDocumentStoredPdf(DispatchGuide::findOrFail($id), $request->get('format', 'A4'));
     }
 }

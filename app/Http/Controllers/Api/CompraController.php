@@ -173,6 +173,95 @@ class CompraController extends Controller
     }
 
     /**
+     * GET /api/v1/compras/{id}/download-{xml|cdr|pdf}
+     */
+    public function download(Request $request, int $id, string $formato)
+    {
+        $compra = Compra::find($id);
+
+        if (! $compra) {
+            return response()->json(['success' => false, 'message' => 'Compra no encontrada.'], 404);
+        }
+
+        if (! $request->user()->canAccessCompany($compra->company_id)) {
+            return $this->sinPermiso();
+        }
+
+        $fileService = app(\App\Services\FileService::class);
+        $download = match ($formato) {
+            'xml' => $fileService->downloadXml($compra),
+            'cdr' => $fileService->downloadCdr($compra),
+            'pdf' => $fileService->downloadPdf($compra),
+            default => null,
+        };
+
+        if (! $download) {
+            return response()->json([
+                'success' => false,
+                'message' => strtoupper($formato) . ' no encontrado.',
+            ], 404);
+        }
+
+        return $download;
+    }
+
+    /**
+     * POST /api/v1/compras/{id}/adjuntos  (multipart: xml|cdr|pdf)
+     *
+     * Permite adjuntar los artefactos que el proveedor no envió (por ejemplo,
+     * cuando solo entregó el PDF). El tipo se deduce del campo del formulario.
+     */
+    public function subirAdjunto(Request $request, int $id): JsonResponse
+    {
+        $compra = Compra::find($id);
+
+        if (! $compra) {
+            return response()->json(['success' => false, 'message' => 'Compra no encontrada.'], 404);
+        }
+
+        if (! $request->user()->canAccessCompany($compra->company_id)) {
+            return $this->sinPermiso();
+        }
+
+        $request->validate([
+            'tipo' => 'required|in:xml,cdr,pdf',
+            'archivo' => 'required|file|max:10240',
+        ]);
+
+        $tipo = $request->string('tipo')->toString();
+        $archivo = $request->file('archivo');
+
+        try {
+            $fileService = app(\App\Services\FileService::class);
+            $contenido = file_get_contents($archivo->getRealPath());
+
+            $path = match ($tipo) {
+                'xml' => $fileService->saveXml($compra, $contenido),
+                'cdr' => $fileService->saveCdr($compra, $contenido),
+                'pdf' => $fileService->savePdf($compra, $contenido),
+            };
+
+            $compra->update(["{$tipo}_path" => $path]);
+
+            return response()->json([
+                'success' => true,
+                'message' => strtoupper($tipo) . ' adjuntado correctamente.',
+                'data' => [
+                    'id' => $compra->id,
+                    "{$tipo}_path" => $path,
+                ],
+            ], 201);
+        } catch (\Throwable $e) {
+            Log::error('Error al adjuntar archivo a compra', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al adjuntar el archivo.',
+            ], 500);
+        }
+    }
+
+    /**
      * @return array<string,mixed>
      */
     protected function validar(Request $request): array
