@@ -12,6 +12,15 @@ class StoreDispatchGuideRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        // La guía se documenta con 'fec_traslado' en el payload; el resto del
+        // sistema usa 'fecha_traslado'. Se normaliza aquí para aceptar ambos.
+        if (! $this->filled('fecha_traslado') && $this->filled('fec_traslado')) {
+            $this->merge(['fecha_traslado' => $this->input('fec_traslado')]);
+        }
+    }
+
     public function rules(): array
     {
         return [
@@ -88,6 +97,14 @@ class StoreDispatchGuideRequest extends FormRequest
             'detalles.*.codigo' => 'required|string|max:50',
             'detalles.*.peso_total' => 'nullable|numeric|min:0',
             
+            // Documentos relacionados (p. ej. factura que sustenta un traslado por compra)
+            'documentos_relacionados' => 'nullable|array',
+            'documentos_relacionados.*.tipo' => 'required_with:documentos_relacionados|string|max:2',
+            'documentos_relacionados.*.numero' => 'required_with:documentos_relacionados|string|max:20',
+            'documentos_relacionados.*.tipo_desc' => 'nullable|string|max:100',
+            'documentos_relacionados.*.fecha' => 'nullable|date',
+            'datos_adicionales' => 'nullable|array',
+
             // Observaciones
             'observaciones' => 'nullable|string|max:1000',
             'usuario_creacion' => 'nullable|string|max:100',

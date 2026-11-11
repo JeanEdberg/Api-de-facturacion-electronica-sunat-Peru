@@ -4,9 +4,15 @@ use App\Models\DispatchGuide;
 use App\Models\Company;
 use App\Models\Branch;
 use App\Models\Client;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
+
+beforeEach(function () {
+    $this->user = User::factory()->create();
+});
 
 test('puede crear una guía de remisión básica con transporte privado', function () {
     // Preparar datos de prueba
@@ -63,7 +69,7 @@ test('puede crear una guía de remisión básica con transporte privado', functi
         'usuario_creacion' => 'TEST_USER'
     ];
 
-    $response = $this->postJson('/api/v1/dispatch-guides', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/dispatch-guides', $data);
 
     $response->assertStatus(201)
             ->assertJson([
@@ -130,7 +136,7 @@ test('puede crear una guía de remisión con transporte público', function () {
         ]
     ];
 
-    $response = $this->postJson('/api/v1/dispatch-guides', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/dispatch-guides', $data);
 
     $response->assertStatus(201)
             ->assertJson([
@@ -190,7 +196,7 @@ test('puede crear guía de remisión para traslado entre establecimientos', func
         ]
     ];
 
-    $response = $this->postJson('/api/v1/dispatch-guides', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/dispatch-guides', $data);
 
     $response->assertStatus(201);
 
@@ -248,7 +254,7 @@ test('puede crear guía con vehículos secundarios', function () {
         ]
     ];
 
-    $response = $this->postJson('/api/v1/dispatch-guides', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/dispatch-guides', $data);
 
     $response->assertStatus(201);
 
@@ -290,7 +296,7 @@ test('valida campos requeridos para transporte privado', function () {
         ]
     ];
 
-    $response = $this->postJson('/api/v1/dispatch-guides', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/dispatch-guides', $data);
 
     $response->assertStatus(422)
             ->assertJsonValidationErrors([
@@ -334,7 +340,7 @@ test('valida campos requeridos para transporte público', function () {
         ]
     ];
 
-    $response = $this->postJson('/api/v1/dispatch-guides', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/dispatch-guides', $data);
 
     $response->assertStatus(422)
             ->assertJsonValidationErrors([
@@ -353,7 +359,7 @@ test('puede generar PDF para una guía de remisión', function () {
         'branch_id' => $branch->id,
     ]);
 
-    $response = $this->postJson("/api/v1/dispatch-guides/{$dispatchGuide->id}/generate-pdf");
+    $response = $this->actingAs($this->user)->postJson("/api/v1/dispatch-guides/{$dispatchGuide->id}/generate-pdf");
 
     $response->assertStatus(200)
             ->assertJson([
@@ -386,7 +392,7 @@ test('puede generar PDF para una guía de remisión', function () {
 });
 
 test('puede obtener el catálogo de motivos de traslado', function () {
-    $response = $this->getJson('/api/v1/dispatch-guides/catalogs/transfer-reasons');
+    $response = $this->actingAs($this->user)->getJson('/api/v1/dispatch-guides/catalogs/transfer-reasons');
 
     $response->assertStatus(200)
             ->assertJson([
@@ -412,7 +418,7 @@ test('puede obtener el catálogo de motivos de traslado', function () {
 });
 
 test('puede obtener el catálogo de modalidades de transporte', function () {
-    $response = $this->getJson('/api/v1/dispatch-guides/catalogs/transport-modes');
+    $response = $this->actingAs($this->user)->getJson('/api/v1/dispatch-guides/catalogs/transport-modes');
 
     $response->assertStatus(200)
             ->assertJson([
@@ -452,7 +458,7 @@ test('puede listar guías de remisión con filtros', function () {
     ]);
 
     // Filtrar por estado
-    $response = $this->getJson("/api/v1/dispatch-guides?company_id={$company->id}&estado_sunat=PENDIENTE");
+    $response = $this->actingAs($this->user)->getJson("/api/v1/dispatch-guides?company_id={$company->id}&estado_sunat=PENDIENTE");
 
     $response->assertStatus(200)
             ->assertJson([
@@ -464,8 +470,72 @@ test('puede listar guías de remisión con filtros', function () {
     expect(count($data))->toBe(3);
 
     // Filtrar por modalidad
-    $response2 = $this->getJson("/api/v1/dispatch-guides?company_id={$company->id}&mod_traslado=01");
+    $response2 = $this->actingAs($this->user)->getJson("/api/v1/dispatch-guides?company_id={$company->id}&mod_traslado=01");
 
     $data2 = $response2->json('data.data');
     expect(count($data2))->toBe(2);
+});
+test('descarga XML, CDR y PDF de una guía de remisión', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $guide = DispatchGuide::factory()->create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+        'xml_path' => 'guias/xml/T001-00000001.xml',
+        'cdr_path' => 'guias/cdr/R-T001-00000001.zip',
+        'pdf_path' => 'guias/pdf/T001-00000001.pdf',
+    ]);
+
+    Storage::disk('public')->put($guide->xml_path, '<xml/>');
+    Storage::disk('public')->put($guide->cdr_path, 'zip');
+    Storage::disk('public')->put($guide->pdf_path, '%PDF-1.4');
+
+    $this->actingAs($this->user)
+        ->get("/api/v1/dispatch-guides/{$guide->id}/download-xml")
+        ->assertStatus(200);
+
+    $this->actingAs($this->user)
+        ->get("/api/v1/dispatch-guides/{$guide->id}/download-cdr")
+        ->assertStatus(200);
+
+    $this->actingAs($this->user)
+        ->get("/api/v1/dispatch-guides/{$guide->id}/download-pdf")
+        ->assertStatus(200);
+});
+
+test('devuelve 404 al descargar un XML de guía inexistente', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $guide = DispatchGuide::factory()->create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+    ]);
+
+    $this->actingAs($this->user)
+        ->getJson("/api/v1/dispatch-guides/{$guide->id}/download-xml")
+        ->assertStatus(404);
+});
+
+test('send-sunat rechaza una guía ya aceptada sin contactar a SUNAT', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $guide = DispatchGuide::factory()->create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+        'estado_sunat' => 'ACEPTADO',
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson("/api/v1/dispatch-guides/{$guide->id}/send-sunat")
+        ->assertStatus(400)
+        ->assertJson(['success' => false]);
 });

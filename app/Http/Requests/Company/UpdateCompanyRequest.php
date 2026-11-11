@@ -40,6 +40,8 @@ class UpdateCompanyRequest extends FormRequest
             'endpoint_beta' => 'nullable|url|max:255',
             'endpoint_produccion' => 'nullable|url|max:255',
             'modo_produccion' => 'nullable|in:true,false,1,0',
+            'contribuyente_amazonia' => 'nullable|in:true,false,1,0',
+            'tipo_amazonia' => 'nullable|in:2001,2002,2003',
             'logo_path' => 'nullable|file|mimes:png,jpeg,jpg|max:2048',
             'activo' => 'boolean'
         ];

@@ -4,6 +4,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
+use App\Http\Controllers\Api\CompraController;
+use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
 use App\Http\Controllers\Api\CompanyController;
@@ -13,7 +15,13 @@ use App\Http\Controllers\Api\CorrelativeController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ConsultaCpeController;
 use App\Http\Controllers\Api\SetupController;
+use App\Http\Controllers\Api\SireController;
+use App\Http\Controllers\Api\SscoController;
 use App\Http\Controllers\Api\UbigeoController;
+use App\Http\Controllers\Api\CreditNoteController;
+use App\Http\Controllers\Api\DebitNoteController;
+use App\Http\Controllers\Api\DispatchGuideController;
+use App\Http\Controllers\Api\GreCredentialsController;
 
 // ========================
 // RUTAS PÚBLICAS (SIN AUTENTICACIÓN)
@@ -159,6 +167,39 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     });
 
     // ========================
+    // REGISTRO DE COMPRAS (COMPROBANTES RECIBIDOS)
+    // ========================
+    // Comprobantes de proveedores: alta manual, importación del XML UBL y
+    // artefactos (XML/CDR/PDF). No se envían a SUNAT; alimentan el Registro
+    // de Compras (PLE 8.1 / RCE del SIRE).
+    Route::prefix('compras')->group(function () {
+        Route::get('/', [CompraController::class, 'index']);
+        Route::post('/', [CompraController::class, 'store']);
+        Route::post('/importar-xml', [CompraController::class, 'importarXml']);
+        Route::get('/{id}', [CompraController::class, 'show']);
+        Route::delete('/{id}', [CompraController::class, 'destroy']);
+        Route::get('/{id}/download-xml', [CompraController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [CompraController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [CompraController::class, 'downloadPdf']);
+        Route::post('/{id}/adjuntos', [CompraController::class, 'adjuntar']);
+    });
+
+    // ========================
+    // BUZÓN ELECTRÓNICO SUNAT / SUNAFIL
+    // ========================
+    // Notificaciones por empresa: alta manual, marcado como leída y
+    // sincronización contra el endpoint configurado por empresa. El listado
+    // añade `resumen` (pendientes y total) para el encabezado del panel.
+    Route::prefix('notificaciones')->group(function () {
+        Route::get('/', [NotificacionController::class, 'index']);
+        Route::post('/', [NotificacionController::class, 'store']);
+        Route::post('/sincronizar', [NotificacionController::class, 'sincronizar']);
+        Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
+        Route::post('/{notificacion}/adjuntos', [NotificacionController::class, 'adjuntar']);
+        Route::get('/{notificacion}/adjunto', [NotificacionController::class, 'descargarAdjunto']);
+    });
+
+    // ========================
     // CONSULTA DE COMPROBANTES ELECTRÓNICOS (CPE)
     // ========================
     Route::prefix('consulta-cpe')->group(function () {
@@ -171,5 +212,89 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
 
         // Estadísticas de consultas
         Route::get('/estadisticas', [ConsultaCpeController::class, 'estadisticasConsultas']);
+    });
+
+    // ========================
+    // PADRÓN SSCO (SUJETO SIN CAPACIDAD OPERATIVA)
+    // ========================
+    // Cruce de RUC contra la relación oficial de SUNAT. Los comprobantes
+    // emitidos por un SSCO no dan crédito fiscal ni sustentan gasto.
+    Route::prefix('padrones/ssco')->group(function () {
+        Route::get('/estado', [SscoController::class, 'estado']);
+        Route::post('/refrescar', [SscoController::class, 'refrescar']);
+        Route::post('/subir', [SscoController::class, 'subir']);
+        Route::post('/lote', [SscoController::class, 'lote']);
+        Route::get('/{ruc}', [SscoController::class, 'consultar']);
+    });
+
+    // ========================
+    // PROPUESTA SIRE (RVIE/RCE) Y REPOSITORIO POR PERIODO
+    // ========================
+    // Genera la propuesta del periodo y la archiva por (empresa, libro,
+    // periodo): re-descargar reemplaza la anterior, sin duplicados.
+    Route::prefix('sire')->group(function () {
+        Route::get('/', [SireController::class, 'index']);
+        Route::post('/subir', [SireController::class, 'subir']);
+        Route::get('/{libro}', [SireController::class, 'descargar']);
+        Route::get('/{libro}/{periodo}', [SireController::class, 'show']);
+    });
+
+    // ========================
+    // NOTAS DE CRÉDITO
+    // ========================
+    Route::prefix('credit-notes')->group(function () {
+        Route::get('/catalogs/motivos', [CreditNoteController::class, 'catalogsMotivos']);
+        Route::get('/', [CreditNoteController::class, 'index']);
+        Route::post('/', [CreditNoteController::class, 'store']);
+        Route::get('/{id}', [CreditNoteController::class, 'show']);
+        Route::get('/{id}/download-xml', [CreditNoteController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [CreditNoteController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [CreditNoteController::class, 'downloadPdf']);
+        Route::post('/{id}/generate-pdf', [CreditNoteController::class, 'generatePdf']);
+        Route::post('/{id}/send-sunat', [CreditNoteController::class, 'sendToSunat']);
+    });
+
+    // ========================
+    // NOTAS DE DÉBITO
+    // ========================
+    Route::prefix('debit-notes')->group(function () {
+        Route::get('/catalogs/motivos', [DebitNoteController::class, 'catalogsMotivos']);
+        Route::get('/', [DebitNoteController::class, 'index']);
+        Route::post('/', [DebitNoteController::class, 'store']);
+        Route::get('/{id}', [DebitNoteController::class, 'show']);
+        Route::get('/{id}/download-xml', [DebitNoteController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DebitNoteController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DebitNoteController::class, 'downloadPdf']);
+        Route::post('/{id}/generate-pdf', [DebitNoteController::class, 'generatePdf']);
+        Route::post('/{id}/send-sunat', [DebitNoteController::class, 'sendToSunat']);
+    });
+
+    // ========================
+    // GUÍAS DE REMISIÓN
+    // ========================
+    Route::prefix('dispatch-guides')->group(function () {
+        Route::get('/catalogs/transfer-reasons', [DispatchGuideController::class, 'catalogsTransferReasons']);
+        Route::get('/catalogs/transport-modes', [DispatchGuideController::class, 'catalogsTransportModes']);
+        Route::get('/', [DispatchGuideController::class, 'index']);
+        Route::post('/', [DispatchGuideController::class, 'store']);
+        Route::get('/{id}', [DispatchGuideController::class, 'show']);
+        Route::get('/{id}/download-xml', [DispatchGuideController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DispatchGuideController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DispatchGuideController::class, 'downloadPdf']);
+        Route::post('/{id}/generate-pdf', [DispatchGuideController::class, 'generatePdf']);
+        Route::post('/{id}/send-sunat', [DispatchGuideController::class, 'sendToSunat']);
+    });
+
+    // ========================
+    // CREDENCIALES GRE (GUÍAS DE REMISIÓN)
+    // ========================
+    Route::get('/gre-credentials/defaults/{modo}', [GreCredentialsController::class, 'defaults'])
+        ->whereIn('modo', ['beta', 'produccion']);
+    Route::prefix('companies/{company_id}/gre-credentials')->group(function () {
+        Route::get('/', [GreCredentialsController::class, 'show']);
+        Route::put('/', [GreCredentialsController::class, 'update']);
+        Route::post('/test-connection', [GreCredentialsController::class, 'testConnection']);
+        Route::delete('/clear', [GreCredentialsController::class, 'clear']);
+        Route::post('/copy', [GreCredentialsController::class, 'copy']);
     });
 });

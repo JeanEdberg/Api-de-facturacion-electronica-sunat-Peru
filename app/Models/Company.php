@@ -37,12 +37,15 @@ class Company extends Model
         'endpoint_beta',
         'endpoint_produccion',
         'modo_produccion',
+        'contribuyente_amazonia',
+        'tipo_amazonia',
         'logo_path',
         'activo',
     ];
 
     protected $casts = [
         'modo_produccion' => 'boolean',
+        'contribuyente_amazonia' => 'boolean',
         'activo' => 'boolean',
     ];
 
@@ -108,6 +111,16 @@ class Company extends Model
     public function voidedDocuments(): HasMany
     {
         return $this->hasMany(VoidedDocument::class);
+    }
+
+    public function compras(): HasMany
+    {
+        return $this->hasMany(Compra::class);
+    }
+
+    public function notificaciones(): HasMany
+    {
+        return $this->hasMany(Notificacion::class);
     }
 
     public function getEndpointAttribute(): string

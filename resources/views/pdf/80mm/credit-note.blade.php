@@ -9,20 +9,11 @@
     ])
 
     {{-- Reference Document --}}
-    @if(isset($documento_afectado) || isset($motivo))
-        <div class="client-section">
-            @if(isset($documento_afectado))
-                <div class="client-details">
-                    DOC. AFECTADO: {{ $documento_afectado }}
-                </div>
-            @endif
-            @if(isset($motivo))
-                <div class="client-details">
-                    MOTIVO: {{ $motivo }}
-                </div>
-            @endif
-        </div>
-    @endif
+    @include('pdf.components.reference-document', [
+        'documento_afectado' => $documento_afectado,
+        'motivo' => $motivo,
+        'format' => '80mm'
+    ])
 
     {{-- Client Info --}}
     @include('pdf.components.client-info-ticket-exact', [

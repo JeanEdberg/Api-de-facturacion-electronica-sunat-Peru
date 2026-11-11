@@ -42,9 +42,15 @@
     ])
     @endif
 
+    {{-- Documentos relacionados (factura vinculada por compra) --}}
+    @include('pdf.components.dispatch-related-documents', [
+        'documentos_relacionados' => $documentos_relacionados ?? [],
+        'format' => 'a5'
+    ])
+
     {{-- Footer --}}
     @include('pdf.components.qr-footer', [
-        'qr_code' => null,
+        'qr_code' => $qr_code,
         'hash' => $hash ?? null,
         'format' => 'a5'
     ])

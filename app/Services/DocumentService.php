@@ -97,7 +97,7 @@ class DocumentService
                 'total_anticipos' => $totals['total_anticipos'],
                 'descuento_global' => $totals['descuento_global'],
                 'detalles' => $data['detalles'],
-                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data),
+                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data, $company),
                 'guias' => $data['guias'] ?? null,
                 'documentos_relacionados' => $data['documentos_relacionados'] ?? null,
                 'datos_adicionales' => $data['datos_adicionales'] ?? null,
@@ -168,7 +168,7 @@ class DocumentService
                 'sub_total' => $totals['sub_total'],
                 'mto_imp_venta' => $totals['mto_imp_venta'],
                 'detalles' => $data['detalles'],
-                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data),
+                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data, $company),
                 'datos_adicionales' => $data['datos_adicionales'] ?? null,
                 'usuario_creacion' => $data['usuario_creacion'] ?? null,
             ]);
@@ -515,7 +515,7 @@ class DocumentService
         }
     }
 
-    protected function generateLegends(float $total, string $moneda, array $data = []): array
+    protected function generateLegends(float $total, string $moneda, array $data = [], ?Company $company = null): array
     {
         $leyendas = [];
         
@@ -534,6 +534,14 @@ class DocumentService
             ];
         }
         
+        // Leyenda 2001/2002/2003: operación exonerada por la Ley 27037 (Amazonía).
+        // Solo se agrega si la empresa es contribuyente de la Amazonía y el
+        // comprobante tiene operaciones exoneradas en la zona.
+        $leyendaAmazonia = $this->amazoniaLegend($company, $data['detalles'] ?? []);
+        if ($leyendaAmazonia) {
+            $leyendas[] = $leyendaAmazonia;
+        }
+
         // Leyenda 2000: Percepción
         if (isset($data['percepcion'])) {
             $leyendas[] = [
@@ -559,6 +567,38 @@ class DocumentService
         }
         
         return $leyendas;
+    }
+
+    /**
+     * Leyenda de exoneración del IGV de la Amazonía (Ley 27037, art. 13.1).
+     *
+     * El código es el del catálogo de leyendas SUNAT: 2001 bienes, 2002
+     * servicios y 2003 contratos de construcción / primera venta de inmuebles.
+     */
+    protected function amazoniaLegend(?Company $company, array $detalles): ?array
+    {
+        if (!$company || !$company->contribuyente_amazonia) {
+            return null;
+        }
+
+        $tieneExoneradas = collect($detalles)->contains(
+            fn ($detalle) => (string) ($detalle['tip_afe_igv'] ?? '') === '20'
+        );
+        if (!$tieneExoneradas) {
+            return null;
+        }
+
+        $textos = [
+            '2001' => 'BIENES TRANSFERIDOS EN LA AMAZONIA REGION SELVA PARA SER CONSUMIDOS EN LA MISMA',
+            '2002' => 'SERVICIOS PRESTADOS EN LA AMAZONIA REGION SELVA PARA SER CONSUMIDOS EN LA MISMA',
+            '2003' => 'CONTRATOS DE CONSTRUCCION EJECUTADOS EN LA AMAZONIA REGION SELVA',
+        ];
+        $codigo = (string) ($company->tipo_amazonia ?: '2001');
+
+        return [
+            'code' => $codigo,
+            'value' => $textos[$codigo] ?? $textos['2001'],
+        ];
     }
     
     protected function hasGratuitasItems(array $detalles): bool
@@ -1192,6 +1232,7 @@ class DocumentService
                     'placa' => $data['vehiculo_placa'] ?? null,
                     'placa_principal' => $data['vehiculo_placa'] ?? null,
                     'placa_secundaria' => $data['vehiculo_placa_secundaria'] ?? null,
+                    'vehiculos_secundarios' => $data['vehiculos_secundarios'] ?? null,
                     'conductor' => $data['mod_traslado'] === '02' && !isset($data['indicadores']) ? [
                         'tipo' => $data['conductor_tipo'] ?? null,
                         'tipo_doc' => $data['conductor_tipo_doc'] ?? null,
@@ -1205,6 +1246,9 @@ class DocumentService
                 // Detalles y observaciones
                 'detalles' => $data['detalles'],
                 'observaciones' => $data['observaciones'] ?? null,
+                // Enlace con la factura cuando el traslado es por compra (motivo 01/02).
+                'documentos_relacionados' => $data['documentos_relacionados'] ?? null,
+                'datos_adicionales' => $data['datos_adicionales'] ?? null,
                 
                 'estado_sunat' => 'PENDIENTE',
                 'usuario_creacion' => $data['usuario_creacion'] ?? null,
@@ -1425,7 +1469,7 @@ class DocumentService
                 foreach ($guide->documentos_relacionados as $doc) {
                     $relDoc = new \Greenter\Model\Despatch\AdditionalDoc();
                     $relDoc->setTipo($doc['tipo'])
-                        ->setTipoDesc($doc['tipo_desc'])
+                        ->setTipoDesc($doc['tipo_desc'] ?? '')
                         ->setNro($doc['numero']);
                     $relDocs[] = $relDoc;
                 }

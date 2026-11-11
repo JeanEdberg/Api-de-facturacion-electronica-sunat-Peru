@@ -45,10 +45,22 @@ MIICertificateDataForTesting
             'endpoint_beta' => 'https://e-beta.sunat.gob.pe/ol-ti-itcpfegem-beta/billService',
             'endpoint_produccion' => 'https://e-factura.sunat.gob.pe/ol-ti-itcpfegem/billService',
             'modo_produccion' => false,
+            'contribuyente_amazonia' => false,
+            'tipo_amazonia' => null,
             'logo_path' => null,
-            'configuraciones' => null,
             'activo' => true,
         ];
+    }
+
+    /**
+     * Indicate that the company is a Ley 27037 Amazonía taxpayer.
+     */
+    public function amazonia(string $tipo = '2001'): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'contribuyente_amazonia' => true,
+            'tipo_amazonia' => $tipo,
+        ]);
     }
 
     /**
