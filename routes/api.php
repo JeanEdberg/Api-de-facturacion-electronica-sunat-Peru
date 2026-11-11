@@ -13,6 +13,8 @@ use App\Http\Controllers\Api\CorrelativeController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ConsultaCpeController;
 use App\Http\Controllers\Api\SetupController;
+use App\Http\Controllers\Api\SireController;
+use App\Http\Controllers\Api\SscoController;
 use App\Http\Controllers\Api\UbigeoController;
 
 // ========================
@@ -171,5 +173,30 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
 
         // Estadísticas de consultas
         Route::get('/estadisticas', [ConsultaCpeController::class, 'estadisticasConsultas']);
+    });
+
+    // ========================
+    // PADRÓN SSCO (SUJETO SIN CAPACIDAD OPERATIVA)
+    // ========================
+    // Cruce de RUC contra la relación oficial de SUNAT. Los comprobantes
+    // emitidos por un SSCO no dan crédito fiscal ni sustentan gasto.
+    Route::prefix('padrones/ssco')->group(function () {
+        Route::get('/estado', [SscoController::class, 'estado']);
+        Route::post('/refrescar', [SscoController::class, 'refrescar']);
+        Route::post('/subir', [SscoController::class, 'subir']);
+        Route::post('/lote', [SscoController::class, 'lote']);
+        Route::get('/{ruc}', [SscoController::class, 'consultar']);
+    });
+
+    // ========================
+    // PROPUESTA SIRE (RVIE/RCE) Y REPOSITORIO POR PERIODO
+    // ========================
+    // Genera la propuesta del periodo y la archiva por (empresa, libro,
+    // periodo): re-descargar reemplaza la anterior, sin duplicados.
+    Route::prefix('sire')->group(function () {
+        Route::get('/', [SireController::class, 'index']);
+        Route::post('/subir', [SireController::class, 'subir']);
+        Route::get('/{libro}', [SireController::class, 'descargar']);
+        Route::get('/{libro}/{periodo}', [SireController::class, 'show']);
     });
 });
