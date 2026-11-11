@@ -26,6 +26,7 @@ class CompanyController extends Controller
                     'id', 'ruc', 'razon_social', 'nombre_comercial', 
                     'direccion', 'distrito', 'provincia', 'departamento',
                     'email', 'telefono', 'modo_produccion', 'activo',
+                    'contribuyente_amazonia', 'tipo_amazonia',
                     'created_at', 'updated_at'
                 ])
                 ->get();

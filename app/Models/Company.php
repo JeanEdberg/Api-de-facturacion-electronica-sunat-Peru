@@ -37,12 +37,15 @@ class Company extends Model
         'endpoint_beta',
         'endpoint_produccion',
         'modo_produccion',
+        'contribuyente_amazonia',
+        'tipo_amazonia',
         'logo_path',
         'activo',
     ];
 
     protected $casts = [
         'modo_produccion' => 'boolean',
+        'contribuyente_amazonia' => 'boolean',
         'activo' => 'boolean',
     ];
 

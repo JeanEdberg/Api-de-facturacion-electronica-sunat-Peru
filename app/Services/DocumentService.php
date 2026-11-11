@@ -97,7 +97,7 @@ class DocumentService
                 'total_anticipos' => $totals['total_anticipos'],
                 'descuento_global' => $totals['descuento_global'],
                 'detalles' => $data['detalles'],
-                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data),
+                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data, $company),
                 'guias' => $data['guias'] ?? null,
                 'documentos_relacionados' => $data['documentos_relacionados'] ?? null,
                 'datos_adicionales' => $data['datos_adicionales'] ?? null,
@@ -168,7 +168,7 @@ class DocumentService
                 'sub_total' => $totals['sub_total'],
                 'mto_imp_venta' => $totals['mto_imp_venta'],
                 'detalles' => $data['detalles'],
-                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data),
+                'leyendas' => $this->generateLegends($totals['mto_imp_venta'], $data['moneda'] ?? 'PEN', $data, $company),
                 'datos_adicionales' => $data['datos_adicionales'] ?? null,
                 'usuario_creacion' => $data['usuario_creacion'] ?? null,
             ]);
@@ -515,7 +515,7 @@ class DocumentService
         }
     }
 
-    protected function generateLegends(float $total, string $moneda, array $data = []): array
+    protected function generateLegends(float $total, string $moneda, array $data = [], ?Company $company = null): array
     {
         $leyendas = [];
         
@@ -558,7 +558,46 @@ class DocumentService
             ];
         }
         
+
+        // Leyenda de Amazonía (catálogo n.º 52): obligatoria en las operaciones
+        // exoneradas del IGV de los contribuyentes de la Amazonía (Ley 27037).
+        $leyendaAmazonia = $this->leyendaAmazonia($data, $company);
+        if ($leyendaAmazonia !== null) {
+            $leyendas[] = $leyendaAmazonia;
+        }
         return $leyendas;
+    }
+
+    // Texto por tipo de operación de la leyenda de Amazonía.
+    protected const LEYENDAS_AMAZONIA = [
+        '2001' => 'BIENES TRANSFERIDOS EN LA AMAZONIA REGION SELVA PARA SER CONSUMIDOS EN LA MISMA',
+        '2002' => 'SERVICIOS PRESTADOS EN LA AMAZONIA REGION SELVA PARA SER CONSUMIDOS EN LA MISMA',
+        '2003' => 'CONTRATOS DE CONSTRUCCION EJECUTADOS EN LA AMAZONIA REGION SELVA',
+    ];
+
+    // Devuelve la leyenda de Amazonía si la empresa es contribuyente de la selva
+    // y el comprobante tiene operaciones exoneradas del IGV.
+    protected function leyendaAmazonia(array $data, ?Company $company): ?array
+    {
+        if (!$company || !$company->contribuyente_amazonia) {
+            return null;
+        }
+
+        $tieneExoneradas = false;
+        foreach ($data['detalles'] ?? [] as $detalle) {
+            if (($detalle['tip_afe_igv'] ?? null) === '20') {
+                $tieneExoneradas = true;
+                break;
+            }
+        }
+        if (!$tieneExoneradas) {
+            return null;
+        }
+
+        $tipo = $company->tipo_amazonia ?: '2001';
+        $texto = self::LEYENDAS_AMAZONIA[$tipo] ?? self::LEYENDAS_AMAZONIA['2001'];
+
+        return ['code' => $tipo, 'value' => $texto];
     }
     
     protected function hasGratuitasItems(array $detalles): bool
