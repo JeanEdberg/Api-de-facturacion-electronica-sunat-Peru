@@ -34,7 +34,9 @@ class UpdateCompanyRequest extends FormRequest
             'email' => 'required|email|max:255',
             'web' => 'nullable|url|max:255',
             'usuario_sol' => 'required|string|max:50',
-            'clave_sol' => 'required|string|max:100',
+            // En la actualización puede venir vacía: el frontend no muestra la
+            // clave actual y solo la envía si el usuario la cambia.
+            'clave_sol' => 'nullable|string|max:100',
             'certificado_pem' => 'nullable|file|mimes:pem,crt,cer,txt|max:2048',
             'certificado_password' => 'nullable|string|max:100',
             'endpoint_beta' => 'nullable|url|max:255',

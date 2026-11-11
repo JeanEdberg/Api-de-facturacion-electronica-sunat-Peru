@@ -25,7 +25,7 @@ class CompanyController extends Controller
                 ->select([
                     'id', 'ruc', 'razon_social', 'nombre_comercial', 
                     'direccion', 'distrito', 'provincia', 'departamento',
-                    'email', 'telefono', 'modo_produccion', 'activo',
+                    'email', 'telefono', 'usuario_sol', 'modo_produccion', 'activo',
                     'contribuyente_amazonia', 'tipo_amazonia',
                     'created_at', 'updated_at'
                 ])
@@ -106,6 +106,15 @@ class CompanyController extends Controller
     {
         try {
             $validatedData = $this->processRequestData($request);
+
+            // La UI no muestra los secretos: si llegan vacíos, se conservan.
+            foreach (['clave_sol', 'certificado_password'] as $secreto) {
+                $valor = $validatedData[$secreto] ?? null;
+                if (array_key_exists($secreto, $validatedData) && ($valor === '' || $valor === null)) {
+                    unset($validatedData[$secreto]);
+                }
+            }
+
             $company->update($validatedData);
 
             Log::info("Empresa actualizada exitosamente", [
