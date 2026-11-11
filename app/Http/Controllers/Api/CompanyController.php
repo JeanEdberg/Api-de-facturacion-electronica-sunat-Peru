@@ -260,9 +260,14 @@ class CompanyController extends Controller
     {
         $validatedData = $request->validated();
 
-        // Procesar booleanos
-        $validatedData['modo_produccion'] = $this->processBoolean($validatedData['modo_produccion'] ?? false);
-        $validatedData['activo'] = $this->processBoolean($validatedData['activo'] ?? true);
+        // Procesar booleanos solo si vienen: la actualización puede ser parcial
+        // (p. ej. el formulario de Accesos SOL no envía 'activo').
+        if (array_key_exists('modo_produccion', $validatedData)) {
+            $validatedData['modo_produccion'] = $this->processBoolean($validatedData['modo_produccion']);
+        }
+        if (array_key_exists('activo', $validatedData)) {
+            $validatedData['activo'] = $this->processBoolean($validatedData['activo']);
+        }
 
         // Procesar archivos
         if ($request->hasFile('certificado_pem')) {
