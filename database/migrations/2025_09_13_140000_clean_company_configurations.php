@@ -26,13 +26,17 @@ return new class extends Migration
                 ->delete();
         }
         
-        // Actualizar la estructura del ENUM removiendo tipos no utilizados
-        DB::statement("ALTER TABLE company_configurations MODIFY COLUMN config_type ENUM(
-            'tax_settings',
-            'invoice_settings', 
-            'gre_settings',
-            'document_settings'
-        ) NOT NULL");
+        // Actualizar la estructura del ENUM removiendo tipos no utilizados.
+        // MODIFY COLUMN es exclusivo de MySQL; en SQLite la columna ya es texto
+        // libre y no necesita ajuste (la suite de tests corre en SQLite).
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE company_configurations MODIFY COLUMN config_type ENUM(
+                'tax_settings',
+                'invoice_settings',
+                'gre_settings',
+                'document_settings'
+            ) NOT NULL");
+        }
         
         // Asegurar que existen configuraciones básicas para empresas existentes
         $companies = DB::table('companies')->where('activo', 1)->get();

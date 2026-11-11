@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ConsultaCpeController;
 use App\Http\Controllers\Api\SetupController;
 use App\Http\Controllers\Api\UbigeoController;
+use App\Http\Controllers\Api\TipoCambioController;
 
 // ========================
 // RUTAS PÚBLICAS (SIN AUTENTICACIÓN)
@@ -157,6 +158,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/download-pdf', [BoletaController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [BoletaController::class, 'generatePdf']);
     });
+
+    // ========================
+    // TIPO DE CAMBIO (SUNAT)
+    // ========================
+    Route::get('/tipo-cambio', [TipoCambioController::class, 'show']);
 
     // ========================
     // CONSULTA DE COMPROBANTES ELECTRÓNICOS (CPE)
