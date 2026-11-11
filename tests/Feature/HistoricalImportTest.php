@@ -161,6 +161,26 @@ test('omite las notas de crédito y débito del PLE de ventas', function () {
     expect(Invoice::count())->toBe(1);
 });
 
+test('avanza el correlativo de la serie tras importar el histórico', function () {
+    $contenido = lineaVentas141([7 => '00000500']) . "\r\n";
+    $archivo = UploadedFile::fake()->createWithContent('ventas.txt', $contenido);
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/historical/importar', [
+            'company_id' => $this->company->id,
+            'archivo' => $archivo,
+        ])
+        ->assertStatus(201);
+
+    $correlativo = \App\Models\Correlative::where('branch_id', $this->branch->id)
+        ->where('tipo_documento', '01')
+        ->where('serie', 'F001')
+        ->first();
+
+    expect($correlativo)->not->toBeNull();
+    expect($correlativo->correlativo_actual)->toBe(500);
+});
+
 test('rechaza un archivo con un número de campos desconocido', function () {
     $archivo = UploadedFile::fake()->createWithContent('raro.txt', "a|b|c|\r\n");
 

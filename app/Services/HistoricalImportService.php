@@ -7,6 +7,7 @@ use App\Models\Branch;
 use App\Models\Client;
 use App\Models\Company;
 use App\Models\Compra;
+use App\Models\Correlative;
 use App\Models\Invoice;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -74,6 +75,7 @@ class HistoricalImportService
         $branchId = $this->resolverSucursal($company, $branchId);
 
         $resultado = $this->resultadoVacio('ventas', count($lineas));
+        $maximos = [];
 
         foreach ($lineas as $indice => $campos) {
             $fila = $indice + 1;
@@ -90,13 +92,43 @@ class HistoricalImportService
 
                 [$creado, $modelo] = $this->guardarVenta($campos, $company, $branchId);
                 $resultado[$creado ? 'importados' : 'actualizados']++;
+
+                $serie = $this->campo($campos, 6);
+                $maximos[$tipoDoc][$serie] = max(
+                    $maximos[$tipoDoc][$serie] ?? 0,
+                    (int) $this->campo($campos, 7),
+                );
             } catch (\Throwable $e) {
                 Log::warning('Error al importar venta histórica', ['fila' => $fila, 'error' => $e->getMessage()]);
                 $resultado['errores'][] = ['fila' => $fila, 'mensaje' => $e->getMessage()];
             }
         }
 
+        $this->ajustarCorrelativos($branchId, $maximos);
+
         return $resultado;
+    }
+
+    /**
+     * Avanza el correlativo de cada serie hasta el último número importado, para
+     * que la próxima emisión continúe después del histórico y no colisione.
+     *
+     * @param  array<string, array<string, int>>  $maximos
+     */
+    private function ajustarCorrelativos(int $branchId, array $maximos): void
+    {
+        foreach ($maximos as $tipoDoc => $series) {
+            foreach ($series as $serie => $ultimo) {
+                $correlativo = Correlative::firstOrCreate(
+                    ['branch_id' => $branchId, 'tipo_documento' => $tipoDoc, 'serie' => $serie],
+                    ['correlativo_actual' => 0],
+                );
+
+                if ($ultimo > (int) $correlativo->correlativo_actual) {
+                    $correlativo->update(['correlativo_actual' => $ultimo]);
+                }
+            }
+        }
     }
 
     /**
@@ -265,6 +297,7 @@ class HistoricalImportService
         $cabecera = array_map(fn ($c) => strtolower(trim((string) $c)), array_shift($filas));
         $resultado = $this->resultadoVacio('mixto', count($filas));
         $branchId ??= $this->resolverSucursal($company, null);
+        $maximos = [];
 
         foreach ($filas as $indice => $celdas) {
             $fila = $indice + 2; // +2 por la cabecera y el índice base 0
@@ -279,6 +312,12 @@ class HistoricalImportService
                 $tipoRegistro = $mapa['tipo_registro'] ?? '';
                 if ($tipoRegistro === 'ventas') {
                     [$creado] = $this->guardarVentaDeMapa($mapa, $company, $branchId);
+                    $tipoDoc = $mapa['tipo_documento'] ?? '01';
+                    $serie = $mapa['serie'] ?? '';
+                    $maximos[$tipoDoc][$serie] = max(
+                        $maximos[$tipoDoc][$serie] ?? 0,
+                        (int) ($mapa['correlativo'] ?? 0),
+                    );
                 } elseif ($tipoRegistro === 'compras') {
                     $creado = $this->guardarCompraDeMapa($mapa, $company);
                 } else {
@@ -291,6 +330,8 @@ class HistoricalImportService
                 $resultado['errores'][] = ['fila' => $fila, 'mensaje' => $e->getMessage()];
             }
         }
+
+        $this->ajustarCorrelativos($branchId, $maximos);
 
         return $resultado;
     }
