@@ -115,6 +115,14 @@ test('sincroniza las notificaciones del endpoint configurado', function () {
 
     expect(Notificacion::where('company_id', $this->company->id)->count())->toBe(2);
     $this->assertDatabaseHas('notificaciones', ['codigo' => 'N-1', 'origen' => 'sincronizada']);
+
+    // Re-sincronizar no duplica ni cuenta como nueva.
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/sincronizar', ['company_id' => $this->company->id])
+        ->assertStatus(200)
+        ->assertJsonPath('data.importadas', 0);
+
+    expect(Notificacion::where('company_id', $this->company->id)->count())->toBe(2);
 });
 
 test('no sincroniza el buzón de una empresa ajena', function () {

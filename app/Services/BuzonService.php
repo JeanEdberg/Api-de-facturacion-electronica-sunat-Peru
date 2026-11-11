@@ -122,7 +122,7 @@ class BuzonService
         $importadas = 0;
 
         foreach ($items as $item) {
-            $this->registrar([
+            $notificacion = $this->registrar([
                 'company_id' => $company->id,
                 'entidad' => strtoupper($item['entidad'] ?? $entidad),
                 'codigo' => $item['codigo'] ?? $item['numero'] ?? null,
@@ -133,7 +133,10 @@ class BuzonService
                 'url' => $item['url'] ?? null,
                 'origen' => 'sincronizada',
             ]);
-            $importadas++;
+
+            if ($notificacion->wasRecentlyCreated) {
+                $importadas++;
+            }
         }
 
         return $importadas;
