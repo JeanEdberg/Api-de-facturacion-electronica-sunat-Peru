@@ -47,6 +47,57 @@ class GreenterService
         $this->seeApi = $this->initializeSeeApi();
     }
 
+    // Resuelve el certificado de la empresa. Usa la ruta guardada en la empresa
+    // (certificado_pem) y, si no existe, recurre a la ruta histórica compartida
+    // para no romper instalaciones de una sola empresa.
+    protected function loadCertificate(): string
+    {
+        $path = $this->resolveCertificatePath();
+
+        if ($path === null) {
+            throw new Exception('No hay certificado digital configurado para la empresa.');
+        }
+
+        $content = file_get_contents($path);
+        if ($content === false) {
+            throw new Exception('No se pudo leer el certificado: ' . $path);
+        }
+
+        Log::info('Certificado cargado', ['path' => $path]);
+
+        return $content;
+    }
+
+    protected function resolveCertificatePath(): ?string
+    {
+        $stored = $this->company->certificado_pem;
+        if (!empty($stored)) {
+            $candidate = $this->absoluteCertificatePath($stored);
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        $legacy = storage_path('app/public/certificado/certificado.pem');
+        return is_file($legacy) ? $legacy : null;
+    }
+
+    protected function absoluteCertificatePath(string $stored): string
+    {
+        // Puede venir como ruta relativa al disco 'public' (certificado/x.pem),
+        // como ruta absoluta o como el propio contenido PEM pegado en la BD.
+        if (str_contains($stored, 'BEGIN CERTIFICATE') || str_contains($stored, 'BEGIN PRIVATE KEY')) {
+            $temp = $this->createTempCertificate($stored);
+            return $temp;
+        }
+
+        if (is_file($stored)) {
+            return $stored;
+        }
+
+        return storage_path('app/public/' . ltrim($stored, '/'));
+    }
+
     protected function initializeSee(): See
     {
         $see = new See();
@@ -56,26 +107,8 @@ class GreenterService
         
         $see->setService($endpoint);
         
-        // Configurar certificado cargando desde archivo
-        try {
-            $certificadoPath = storage_path('app/public/certificado/certificado.pem');
-            
-            if (!file_exists($certificadoPath)) {
-                throw new Exception("Archivo de certificado no encontrado: " . $certificadoPath);
-            }
-            
-            $certificadoContent = file_get_contents($certificadoPath);
-            
-            if ($certificadoContent === false) {
-                throw new Exception("No se pudo leer el archivo de certificado");
-            }
-            
-            $see->setCertificate($certificadoContent);
-            Log::info("Certificado cargado desde archivo: " . $certificadoPath);
-        } catch (Exception $e) {
-            Log::error("Error al configurar certificado: " . $e->getMessage());
-            throw new Exception("Error al configurar certificado: " . $e->getMessage());
-        }
+        // Configurar certificado de la empresa
+        $see->setCertificate($this->loadCertificate());
         
         // Configurar credenciales SOL
         $see->setClaveSOL(
@@ -108,26 +141,8 @@ class GreenterService
             'cpe' => $endpoint,
         ]);
         
-        // Configurar certificado
-        try {
-            $certificadoPath = storage_path('app/public/certificado/certificado.pem');
-            
-            if (!file_exists($certificadoPath)) {
-                throw new Exception("Archivo de certificado no encontrado para GRE: " . $certificadoPath);
-            }
-            
-            $certificadoContent = file_get_contents($certificadoPath);
-            
-            if ($certificadoContent === false) {
-                throw new Exception("No se pudo leer el archivo de certificado para GRE");
-            }
-            
-            $api->setCertificate($certificadoContent);
-            Log::info("Certificado GRE cargado desde archivo: " . $certificadoPath);
-        } catch (Exception $e) {
-            Log::error("Error al configurar certificado para GRE: " . $e->getMessage());
-            throw new Exception("Error al configurar certificado para GRE: " . $e->getMessage());
-        }
+        // Configurar certificado de la empresa
+        $api->setCertificate($this->loadCertificate());
         
         // Configurar credenciales SOL para API GRE
         try {

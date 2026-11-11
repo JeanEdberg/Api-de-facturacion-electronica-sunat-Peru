@@ -246,7 +246,7 @@ class SetupController extends Controller
             // Configurar certificado si se proporciona
             if ($request->hasFile('certificate_file')) {
                 $certificateFile = $request->file('certificate_file');
-                $path = $certificateFile->storeAs('certificado', 'certificado.pem', 'public');
+                $path = $certificateFile->storeAs('certificado', 'certificado_' . $company->ruc . '.pem', 'public');
                 
                 $company->update([
                     'certificado_pem' => $path,
@@ -345,7 +345,7 @@ class SetupController extends Controller
         // Procesar certificado PEM si se subió un archivo
         if ($request->hasFile('certificado_pem')) {
             $certificateFile = $request->file('certificado_pem');
-            $path = $certificateFile->storeAs('certificado', 'certificado.pem', 'public');
+            $path = $certificateFile->storeAs('certificado', 'certificado_' . ($companyData['ruc'] ?? 'empresa') . '.pem', 'public');
             $companyData['certificado_pem'] = $path;
             $companyData['certificado_password'] = $request->certificado_password;
         }
@@ -453,7 +453,7 @@ class SetupController extends Controller
         return [
             'certificado_directory' => $certificadoExists,
             'logo_directory' => $logoExists,
-            'certificado_file_exists' => Storage::disk('public')->exists('certificado/certificado.pem'),
+            'certificado_file_exists' => count(Storage::disk('public')->files('certificado')) > 0,
             'storage_link_exists' => is_link(public_path('storage'))
         ];
     }
