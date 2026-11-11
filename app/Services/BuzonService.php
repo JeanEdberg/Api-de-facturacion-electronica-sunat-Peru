@@ -4,8 +4,10 @@ namespace App\Services;
 
 use App\Models\Company;
 use App\Models\Notificacion;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Buzón electrónico SUNAT (SIE) / SUNAFIL.
@@ -49,6 +51,44 @@ class BuzonService
         $notificacion->update(['estado' => 'leida', 'leida_en' => now()]);
 
         return $notificacion->refresh();
+    }
+
+    /**
+     * Adjunta (o reemplaza) el expediente PDF/imagen de una notificación.
+     */
+    public function adjuntar(Notificacion $notificacion, UploadedFile $archivo): Notificacion
+    {
+        $anterior = $notificacion->adjunto_path;
+
+        $ruta = $this->guardarAdjunto($notificacion, $archivo);
+        $notificacion->update(['adjunto_path' => $ruta, 'tiene_adjunto' => true]);
+
+        if ($anterior && $anterior !== $ruta) {
+            Storage::disk('public')->delete($anterior);
+        }
+
+        return $notificacion->refresh();
+    }
+
+    public function rutaAdjunto(Notificacion $notificacion): ?string
+    {
+        $ruta = $notificacion->adjunto_path;
+
+        if (! $ruta || ! Storage::disk('public')->exists($ruta)) {
+            return null;
+        }
+
+        return $ruta;
+    }
+
+    private function guardarAdjunto(Notificacion $notificacion, UploadedFile $archivo): string
+    {
+        $extension = strtolower($archivo->getClientOriginalExtension() ?: $archivo->extension() ?: 'pdf');
+        $ruta = "buzon/{$notificacion->company_id}/{$notificacion->id}.{$extension}";
+
+        Storage::disk('public')->put($ruta, file_get_contents($archivo->getRealPath()));
+
+        return $ruta;
     }
 
     /**

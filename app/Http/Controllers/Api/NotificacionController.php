@@ -6,8 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\Notificacion;
 use App\Services\BuzonService;
+use App\Services\CertificadoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Buzón electrónico SUNAT / SUNAFIL.
@@ -18,8 +21,10 @@ use Illuminate\Http\Request;
  */
 class NotificacionController extends Controller
 {
-    public function __construct(private BuzonService $service)
-    {
+    public function __construct(
+        private BuzonService $service,
+        private CertificadoService $certificado,
+    ) {
     }
 
     public function index(Request $request): JsonResponse
@@ -49,8 +54,25 @@ class NotificacionController extends Controller
             'success' => true,
             'data' => $paginador,
             'resumen' => $this->service->resumen($companyId, $data['entidad'] ?? null),
+            'alertas' => $this->alertas($companyId),
             'message' => 'Notificaciones obtenidas correctamente',
         ]);
+    }
+
+    /**
+     * Alertas del buzón: hoy solo el vencimiento del certificado digital.
+     *
+     * @return array{certificado: array<string, mixed>}
+     */
+    private function alertas(int $companyId): array
+    {
+        $company = Company::find($companyId);
+
+        return [
+            'certificado' => $company
+                ? $this->certificado->estado($company)
+                : ['tiene' => false, 'vencido' => false, 'por_vencer' => false],
+        ];
     }
 
     public function store(Request $request): JsonResponse
@@ -121,6 +143,47 @@ class NotificacionController extends Controller
                 ? "Sincronizado: {$resultado['importadas']} notificación(es)."
                 : 'Buzón sincronizado: sin notificaciones nuevas.',
         ]);
+    }
+
+    public function adjuntar(Request $request, Notificacion $notificacion): JsonResponse
+    {
+        abort_if(
+            ! $request->user()?->canAccessCompany($notificacion->company_id),
+            403,
+            'No tienes acceso a esta empresa.'
+        );
+
+        $request->validate([
+            'archivo' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
+        ]);
+
+        $notificacion = $this->service->adjuntar($notificacion, $request->file('archivo'));
+
+        return response()->json([
+            'success' => true,
+            'data' => $notificacion,
+            'message' => 'Adjunto guardado correctamente',
+        ]);
+    }
+
+    public function descargarAdjunto(Request $request, Notificacion $notificacion): JsonResponse|StreamedResponse
+    {
+        abort_if(
+            ! $request->user()?->canAccessCompany($notificacion->company_id),
+            403,
+            'No tienes acceso a esta empresa.'
+        );
+
+        $ruta = $this->service->rutaAdjunto($notificacion);
+
+        if (! $ruta) {
+            return response()->json([
+                'success' => false,
+                'message' => 'La notificación no tiene adjunto',
+            ], 404);
+        }
+
+        return Storage::disk('public')->download($ruta);
     }
 
     private function companyId(Request $request, ?int $companyId): int

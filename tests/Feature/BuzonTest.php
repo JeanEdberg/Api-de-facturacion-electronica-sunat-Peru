@@ -4,7 +4,10 @@ use App\Models\Company;
 use App\Models\Notificacion;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
 
@@ -15,6 +18,18 @@ beforeEach(function () {
     ]);
     $this->user = User::factory()->create(['company_id' => $this->company->id]);
 });
+
+/** Genera un PEM autofirmado (clave + certificado) válido por N días. */
+function pemValidoPorDias(int $dias): string
+{
+    $key = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+    $csr = openssl_csr_new(['commonName' => 'INMOA ERP'], $key);
+    $cert = openssl_csr_sign($csr, null, $key, $dias);
+    openssl_x509_export($cert, $certOut);
+    openssl_pkey_export($key, $keyOut);
+
+    return $keyOut."\n".$certOut;
+}
 
 test('registra una notificación manual y la lista con resumen', function () {
     $this->actingAs($this->user)
@@ -128,8 +143,92 @@ test('sincroniza las notificaciones del endpoint configurado', function () {
 test('no sincroniza el buzón de una empresa ajena', function () {
     $otra = Company::factory()->create();
     config()->set('services.buzon.sunat_endpoint', 'https://buzon.test/api/sunat');
-
     $this->actingAs($this->user)
         ->getJson("/api/v1/notificaciones?company_id={$otra->id}")
         ->assertStatus(403);
+});
+
+test('adjunta y descarga el expediente de una notificación', function () {
+    Storage::fake('public');
+
+    $notificacion = Notificacion::factory()->create(['company_id' => $this->company->id]);
+
+    $archivo = UploadedFile::fake()->create('resolucion.pdf', 20, 'application/pdf');
+
+    $this->actingAs($this->user)
+        ->post("/api/v1/notificaciones/{$notificacion->id}/adjuntos", ['archivo' => $archivo], ['Accept' => 'application/json'])
+        ->assertStatus(200)
+        ->assertJsonPath('data.tiene_adjunto', true);
+
+    $notificacion->refresh();
+    expect($notificacion->adjunto_path)->not->toBeNull();
+    Storage::disk('public')->assertExists($notificacion->adjunto_path);
+
+    $this->actingAs($this->user)
+        ->get("/api/v1/notificaciones/{$notificacion->id}/adjunto")
+        ->assertStatus(200)
+        ->assertHeader('content-disposition');
+});
+
+test('rechaza adjuntos que no son PDF ni imagen', function () {
+    Storage::fake('public');
+
+    $notificacion = Notificacion::factory()->create(['company_id' => $this->company->id]);
+    $archivo = UploadedFile::fake()->create('script.exe', 5, 'application/octet-stream');
+
+    $this->actingAs($this->user)
+        ->post("/api/v1/notificaciones/{$notificacion->id}/adjuntos", ['archivo' => $archivo], ['Accept' => 'application/json'])
+        ->assertStatus(422);
+
+    expect($notificacion->refresh()->tiene_adjunto)->toBeFalse();
+});
+
+test('no adjunta a la notificación de una empresa ajena', function () {
+    Storage::fake('public');
+
+    $otra = Company::factory()->create();
+    $notificacion = Notificacion::factory()->create(['company_id' => $otra->id]);
+    $archivo = UploadedFile::fake()->create('resolucion.pdf', 20, 'application/pdf');
+
+    $this->actingAs($this->user)
+        ->post("/api/v1/notificaciones/{$notificacion->id}/adjuntos", ['archivo' => $archivo], ['Accept' => 'application/json'])
+        ->assertStatus(403);
+});
+
+test('avisa en el listado cuando el certificado está por vencer', function () {
+    config()->set('services.buzon.cert_alerta_dias', 30);
+
+    $this->company->update(['certificado_pem' => pemValidoPorDias(10)]);
+
+    $this->actingAs($this->user)
+        ->getJson("/api/v1/notificaciones?company_id={$this->company->id}")
+        ->assertStatus(200)
+        ->assertJsonPath('alertas.certificado.tiene', true)
+        ->assertJsonPath('alertas.certificado.por_vencer', true)
+        ->assertJsonPath('alertas.certificado.vencido', false);
+});
+
+test('marca el certificado como vencido cuando ya caducó', function () {
+    $this->company->update(['certificado_pem' => pemValidoPorDias(5)]);
+
+    Carbon::setTestNow(now()->addDays(10));
+
+    try {
+        $this->actingAs($this->user)
+            ->getJson("/api/v1/notificaciones?company_id={$this->company->id}")
+            ->assertStatus(200)
+            ->assertJsonPath('alertas.certificado.vencido', true)
+            ->assertJsonPath('alertas.certificado.por_vencer', false);
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
+test('sin certificado no hay alerta de vencimiento', function () {
+    $this->company->update(['certificado_pem' => null]);
+
+    $this->actingAs($this->user)
+        ->getJson("/api/v1/notificaciones?company_id={$this->company->id}")
+        ->assertStatus(200)
+        ->assertJsonPath('alertas.certificado.tiene', false);
 });

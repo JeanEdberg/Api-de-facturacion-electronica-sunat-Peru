@@ -42,6 +42,7 @@ return [
         'sunat_endpoint' => env('SUNAT_BUZON_ENDPOINT'),
         'sunafil_endpoint' => env('SUNAFIL_BUZON_ENDPOINT'),
         'token' => env('BUZON_TOKEN'),
+        'cert_alerta_dias' => env('BUZON_CERT_ALERTA_DIAS', 30),
     ],
 
 ];

@@ -191,6 +191,8 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::post('/', [NotificacionController::class, 'store']);
         Route::post('/sincronizar', [NotificacionController::class, 'sincronizar']);
         Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
+        Route::post('/{notificacion}/adjuntos', [NotificacionController::class, 'adjuntar']);
+        Route::get('/{notificacion}/adjunto', [NotificacionController::class, 'descargarAdjunto']);
     });
 
     // ========================
