@@ -93,7 +93,7 @@ class BoletaController extends Controller
     /**
      * Enviar boleta a SUNAT
      */
-    public function sendToSunat(string $id): JsonResponse
+    public function sendToSunat(Request $request, string $id): JsonResponse
     {
         try {
             $boleta = Boleta::with(['company', 'branch', 'client'])->findOrFail($id);
@@ -103,6 +103,17 @@ class BoletaController extends Controller
                     'success' => false,
                     'message' => 'La boleta ya fue aceptada por SUNAT'
                 ], 400);
+            }
+
+            // Modo asíncrono: encola el envío con reintentos.
+            if ($request->boolean('async')) {
+                \App\Jobs\SendDocumentToSunatJob::dispatch('boleta', $boleta->id);
+
+                return response()->json([
+                    'success' => true,
+                    'data' => $boleta,
+                    'message' => 'Envío encolado: se procesará con reintentos automáticos',
+                ], 202);
             }
 
             $result = $this->documentService->sendToSunat($boleta, 'boleta');

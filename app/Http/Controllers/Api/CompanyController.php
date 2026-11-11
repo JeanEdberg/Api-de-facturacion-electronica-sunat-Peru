@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
 use Exception;
 
 class CompanyController extends Controller
@@ -263,7 +264,9 @@ class CompanyController extends Controller
 
         // Procesar archivos
         if ($request->hasFile('certificado_pem')) {
-            $validatedData['certificado_pem'] = $this->storeFile($request->file('certificado_pem'), 'certificado', 'certificado.pem');
+            // Se guarda el CONTENIDO PEM en la columna, no una ruta fija: cada
+            // empresa debe conservar su propio certificado (multiempresa real).
+            $validatedData['certificado_pem'] = $this->readCertificateContent($request->file('certificado_pem'));
         }
 
         if ($request->hasFile('logo_path')) {
@@ -288,6 +291,23 @@ class CompanyController extends Controller
     private function storeFile($file, string $directory, string $fileName): string
     {
         return $file->storeAs($directory, $fileName, 'public');
+    }
+
+    /**
+     * Lee el contenido PEM del certificado subido. Se persiste el texto en la
+     * columna `certificado_pem` para que cada empresa conserve el suyo.
+     */
+    private function readCertificateContent($file): string
+    {
+        $contenido = file_get_contents($file->getRealPath());
+
+        if ($contenido === false || ! str_contains($contenido, 'BEGIN CERTIFICATE')) {
+            throw ValidationException::withMessages([
+                'certificado_pem' => 'El archivo no parece un certificado PEM válido (falta -----BEGIN CERTIFICATE-----).',
+            ]);
+        }
+
+        return $contenido;
     }
 
     /**

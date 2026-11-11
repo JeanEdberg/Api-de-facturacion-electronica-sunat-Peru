@@ -111,7 +111,7 @@ class InvoiceController extends Controller
         }
     }
 
-    public function sendToSunat($id): JsonResponse
+    public function sendToSunat(Request $request, $id): JsonResponse
     {
         try {
             $invoice = Invoice::with(['company', 'branch', 'client'])->findOrFail($id);
@@ -121,6 +121,17 @@ class InvoiceController extends Controller
                     'success' => false,
                     'message' => 'La factura ya fue enviada y aceptada por SUNAT'
                 ], 400);
+            }
+
+            // Modo asíncrono: encola el envío con reintentos y responde de inmediato.
+            if ($request->boolean('async')) {
+                \App\Jobs\SendDocumentToSunatJob::dispatch('invoice', $invoice->id);
+
+                return response()->json([
+                    'success' => true,
+                    'data' => $invoice,
+                    'message' => 'Envío encolado: se procesará con reintentos automáticos',
+                ], 202);
             }
 
             $result = $this->documentService->sendToSunat($invoice, 'invoice');

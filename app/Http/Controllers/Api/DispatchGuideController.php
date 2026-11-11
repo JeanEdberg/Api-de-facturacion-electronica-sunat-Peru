@@ -196,7 +196,7 @@ class DispatchGuideController extends Controller
         return $download;
     }
 
-    public function sendToSunat($id): JsonResponse
+    public function sendToSunat(Request $request, $id): JsonResponse
     {
         $guia = DispatchGuide::findOrFail($id);
 
@@ -205,6 +205,17 @@ class DispatchGuideController extends Controller
                 'success' => false,
                 'message' => 'La guía ya fue enviada y aceptada por SUNAT',
             ], 400);
+        }
+
+        // Modo asíncrono: encola el envío con reintentos.
+        if ($request->boolean('async')) {
+            \App\Jobs\SendDocumentToSunatJob::dispatch('dispatch_guide', $guia->id);
+
+            return response()->json([
+                'success' => true,
+                'data' => $guia,
+                'message' => 'Envío encolado: se procesará con reintentos automáticos',
+            ], 202);
         }
 
         $result = $this->documentService->sendDispatchGuideToSunat($guia);

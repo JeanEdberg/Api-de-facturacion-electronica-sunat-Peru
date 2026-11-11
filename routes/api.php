@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
 use App\Http\Controllers\Api\CompraController;
+use App\Http\Controllers\Api\OnboardingController;
 use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
@@ -42,6 +43,10 @@ Route::post('/auth/initialize', [AuthController::class, 'initialize']);
 
 // Autenticación
 Route::post('/auth/login', [AuthController::class, 'login']);
+
+// Onboarding self-service: una empresa se registra sola (crea empresa, sucursal
+// principal y usuario administrador, con sus credenciales SOL y certificado).
+Route::post('/auth/register', [OnboardingController::class, 'register']);
 
 // ========================
 // RUTAS PROTEGIDAS (CON AUTENTICACIÓN)
