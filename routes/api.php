@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\TipoCambioController;
 use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\CompraController;
 use App\Http\Controllers\Api\BulkDocumentController;
+use App\Http\Controllers\Api\HistoricalImportController;
 use App\Http\Controllers\Api\SireController;
 use App\Http\Controllers\Api\CreditNoteController;
 use App\Http\Controllers\Api\DebitNoteController;
@@ -217,6 +218,14 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::prefix('bulk')->group(function () {
         Route::post('/documentos', [BulkDocumentController::class, 'store']);
         Route::get('/plantilla', [BulkDocumentController::class, 'plantilla']);
+    });
+
+    // ========================
+    // IMPORTACIÓN HISTÓRICA (PERÍODOS ANTERIORES)
+    // ========================
+    Route::prefix('historical')->group(function () {
+        Route::post('/importar', [HistoricalImportController::class, 'importar']);
+        Route::get('/plantilla', [HistoricalImportController::class, 'plantilla']);
     });
 
     // ========================
