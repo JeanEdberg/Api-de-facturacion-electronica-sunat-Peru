@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
+use App\Http\Controllers\Api\DailySummaryController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
 use App\Http\Controllers\Api\CompanyController;
@@ -166,6 +167,20 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/download-cdr', [BoletaController::class, 'downloadCdr']);
         Route::get('/{id}/download-pdf', [BoletaController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [BoletaController::class, 'generatePdf']);
+    });
+
+    // ========================
+    // RESÚMENES DIARIOS (BOLETAS)
+    // ========================
+    Route::prefix('daily-summaries')->group(function () {
+        Route::get('/pending', [DailySummaryController::class, 'pending']);
+        Route::get('/', [DailySummaryController::class, 'index']);
+        Route::post('/', [DailySummaryController::class, 'store']);
+        Route::get('/{id}', [DailySummaryController::class, 'show']);
+        Route::post('/{id}/send-sunat', [DailySummaryController::class, 'sendToSunat']);
+        Route::post('/{id}/check-status', [DailySummaryController::class, 'checkStatus']);
+        Route::get('/{id}/download-xml', [DailySummaryController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DailySummaryController::class, 'downloadCdr']);
     });
 
     // ========================
