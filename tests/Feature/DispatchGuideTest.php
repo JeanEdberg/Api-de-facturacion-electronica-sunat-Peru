@@ -521,3 +521,21 @@ test('devuelve 404 al descargar un XML de guía inexistente', function () {
         ->getJson("/api/v1/dispatch-guides/{$guide->id}/download-xml")
         ->assertStatus(404);
 });
+
+test('send-sunat rechaza una guía ya aceptada sin contactar a SUNAT', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $guide = DispatchGuide::factory()->create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+        'estado_sunat' => 'ACEPTADO',
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson("/api/v1/dispatch-guides/{$guide->id}/send-sunat")
+        ->assertStatus(400)
+        ->assertJson(['success' => false]);
+});

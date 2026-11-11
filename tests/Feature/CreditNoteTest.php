@@ -6,6 +6,7 @@ use App\Models\Branch;
 use App\Models\Client;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
 
@@ -248,4 +249,68 @@ test('puede listar notas de crédito con filtros', function () {
 
     $data = $response->json('data.data');
     expect(count($data))->toBe(3);
+});
+test('descarga XML, CDR y PDF de una nota de crédito', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $note = CreditNote::create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+        'tipo_documento' => '07',
+        'serie' => 'FC01',
+        'correlativo' => '000001',
+        'numero_completo' => 'FC01-000001',
+        'fecha_emision' => now(),
+        'moneda' => 'PEN',
+        'mto_imp_venta' => 118,
+        'detalles' => [['descripcion' => 'Servicio', 'cantidad' => 1, 'mto_valor_unitario' => 100]],
+        'tipo_doc_afectado' => '01',
+        'num_doc_afectado' => 'F001-000001',
+        'cod_motivo' => '07',
+        'des_motivo' => 'Devolución',
+        'xml_path' => 'notas/xml/FC01-000001.xml',
+        'cdr_path' => 'notas/cdr/R-FC01-000001.zip',
+        'pdf_path' => 'notas/pdf/FC01-000001.pdf',
+    ]);
+
+    Storage::disk('public')->put($note->xml_path, '<xml/>');
+    Storage::disk('public')->put($note->cdr_path, 'zip');
+    Storage::disk('public')->put($note->pdf_path, '%PDF-1.4');
+
+    $this->actingAs($this->user)->get("/api/v1/credit-notes/{$note->id}/download-xml")->assertStatus(200);
+    $this->actingAs($this->user)->get("/api/v1/credit-notes/{$note->id}/download-cdr")->assertStatus(200);
+    $this->actingAs($this->user)->get("/api/v1/credit-notes/{$note->id}/download-pdf")->assertStatus(200);
+});
+
+test('send-sunat rechaza una nota de crédito ya aceptada', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $note = CreditNote::create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+        'tipo_documento' => '07',
+        'serie' => 'FC01',
+        'correlativo' => '000002',
+        'numero_completo' => 'FC01-000002',
+        'fecha_emision' => now(),
+        'moneda' => 'PEN',
+        'mto_imp_venta' => 118,
+        'detalles' => [['descripcion' => 'Servicio', 'cantidad' => 1, 'mto_valor_unitario' => 100]],
+        'tipo_doc_afectado' => '01',
+        'num_doc_afectado' => 'F001-000001',
+        'cod_motivo' => '07',
+        'des_motivo' => 'Devolución',
+        'estado_sunat' => 'ACEPTADO',
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson("/api/v1/credit-notes/{$note->id}/send-sunat")
+        ->assertStatus(400)
+        ->assertJson(['success' => false]);
 });
