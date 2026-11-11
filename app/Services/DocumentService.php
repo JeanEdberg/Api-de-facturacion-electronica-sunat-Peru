@@ -1232,6 +1232,7 @@ class DocumentService
                     'placa' => $data['vehiculo_placa'] ?? null,
                     'placa_principal' => $data['vehiculo_placa'] ?? null,
                     'placa_secundaria' => $data['vehiculo_placa_secundaria'] ?? null,
+                    'vehiculos_secundarios' => $data['vehiculos_secundarios'] ?? null,
                     'conductor' => $data['mod_traslado'] === '02' && !isset($data['indicadores']) ? [
                         'tipo' => $data['conductor_tipo'] ?? null,
                         'tipo_doc' => $data['conductor_tipo_doc'] ?? null,

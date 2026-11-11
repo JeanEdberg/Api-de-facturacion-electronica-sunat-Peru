@@ -63,7 +63,7 @@ class DispatchGuideFactory extends Factory
                 'placa_principal' => 'ABC123',
                 'placa_secundaria' => null,
                 'autorizacion' => null
-            ]
+            ],
             
             // Detalles de productos
             'detalles' => [

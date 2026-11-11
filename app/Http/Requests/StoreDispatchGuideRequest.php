@@ -12,6 +12,15 @@ class StoreDispatchGuideRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        // La guía se documenta con 'fec_traslado' en el payload; el resto del
+        // sistema usa 'fecha_traslado'. Se normaliza aquí para aceptar ambos.
+        if (! $this->filled('fecha_traslado') && $this->filled('fec_traslado')) {
+            $this->merge(['fecha_traslado' => $this->input('fec_traslado')]);
+        }
+    }
+
     public function rules(): array
     {
         return [

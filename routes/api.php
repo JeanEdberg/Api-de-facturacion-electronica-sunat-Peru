@@ -18,6 +18,10 @@ use App\Http\Controllers\Api\SetupController;
 use App\Http\Controllers\Api\SireController;
 use App\Http\Controllers\Api\SscoController;
 use App\Http\Controllers\Api\UbigeoController;
+use App\Http\Controllers\Api\CreditNoteController;
+use App\Http\Controllers\Api\DebitNoteController;
+use App\Http\Controllers\Api\DispatchGuideController;
+use App\Http\Controllers\Api\GreCredentialsController;
 
 // ========================
 // RUTAS PÚBLICAS (SIN AUTENTICACIÓN)
@@ -233,5 +237,52 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::post('/subir', [SireController::class, 'subir']);
         Route::get('/{libro}', [SireController::class, 'descargar']);
         Route::get('/{libro}/{periodo}', [SireController::class, 'show']);
+    });
+
+    // ========================
+    // NOTAS DE CRÉDITO
+    // ========================
+    Route::prefix('credit-notes')->group(function () {
+        Route::get('/catalogs/motivos', [CreditNoteController::class, 'catalogsMotivos']);
+        Route::get('/', [CreditNoteController::class, 'index']);
+        Route::post('/', [CreditNoteController::class, 'store']);
+        Route::get('/{id}', [CreditNoteController::class, 'show']);
+        Route::post('/{id}/generate-pdf', [CreditNoteController::class, 'generatePdf']);
+    });
+
+    // ========================
+    // NOTAS DE DÉBITO
+    // ========================
+    Route::prefix('debit-notes')->group(function () {
+        Route::get('/catalogs/motivos', [DebitNoteController::class, 'catalogsMotivos']);
+        Route::get('/', [DebitNoteController::class, 'index']);
+        Route::post('/', [DebitNoteController::class, 'store']);
+        Route::get('/{id}', [DebitNoteController::class, 'show']);
+        Route::post('/{id}/generate-pdf', [DebitNoteController::class, 'generatePdf']);
+    });
+
+    // ========================
+    // GUÍAS DE REMISIÓN
+    // ========================
+    Route::prefix('dispatch-guides')->group(function () {
+        Route::get('/catalogs/transfer-reasons', [DispatchGuideController::class, 'catalogsTransferReasons']);
+        Route::get('/catalogs/transport-modes', [DispatchGuideController::class, 'catalogsTransportModes']);
+        Route::get('/', [DispatchGuideController::class, 'index']);
+        Route::post('/', [DispatchGuideController::class, 'store']);
+        Route::get('/{id}', [DispatchGuideController::class, 'show']);
+        Route::post('/{id}/generate-pdf', [DispatchGuideController::class, 'generatePdf']);
+    });
+
+    // ========================
+    // CREDENCIALES GRE (GUÍAS DE REMISIÓN)
+    // ========================
+    Route::get('/gre-credentials/defaults/{modo}', [GreCredentialsController::class, 'defaults'])
+        ->whereIn('modo', ['beta', 'produccion']);
+    Route::prefix('companies/{company_id}/gre-credentials')->group(function () {
+        Route::get('/', [GreCredentialsController::class, 'show']);
+        Route::put('/', [GreCredentialsController::class, 'update']);
+        Route::post('/test-connection', [GreCredentialsController::class, 'testConnection']);
+        Route::delete('/clear', [GreCredentialsController::class, 'clear']);
+        Route::post('/copy', [GreCredentialsController::class, 'copy']);
     });
 });
