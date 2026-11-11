@@ -1246,6 +1246,9 @@ class DocumentService
                 // Detalles y observaciones
                 'detalles' => $data['detalles'],
                 'observaciones' => $data['observaciones'] ?? null,
+                // Enlace con la factura cuando el traslado es por compra (motivo 01/02).
+                'documentos_relacionados' => $data['documentos_relacionados'] ?? null,
+                'datos_adicionales' => $data['datos_adicionales'] ?? null,
                 
                 'estado_sunat' => 'PENDIENTE',
                 'usuario_creacion' => $data['usuario_creacion'] ?? null,
@@ -1466,7 +1469,7 @@ class DocumentService
                 foreach ($guide->documentos_relacionados as $doc) {
                     $relDoc = new \Greenter\Model\Despatch\AdditionalDoc();
                     $relDoc->setTipo($doc['tipo'])
-                        ->setTipoDesc($doc['tipo_desc'])
+                        ->setTipoDesc($doc['tipo_desc'] ?? '')
                         ->setNro($doc['numero']);
                     $relDocs[] = $relDoc;
                 }

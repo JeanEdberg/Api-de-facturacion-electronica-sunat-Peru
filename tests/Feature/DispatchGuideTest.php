@@ -6,6 +6,7 @@ use App\Models\Branch;
 use App\Models\Client;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
 
@@ -473,4 +474,50 @@ test('puede listar guías de remisión con filtros', function () {
 
     $data2 = $response2->json('data.data');
     expect(count($data2))->toBe(2);
+});
+test('descarga XML, CDR y PDF de una guía de remisión', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $guide = DispatchGuide::factory()->create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+        'xml_path' => 'guias/xml/T001-00000001.xml',
+        'cdr_path' => 'guias/cdr/R-T001-00000001.zip',
+        'pdf_path' => 'guias/pdf/T001-00000001.pdf',
+    ]);
+
+    Storage::disk('public')->put($guide->xml_path, '<xml/>');
+    Storage::disk('public')->put($guide->cdr_path, 'zip');
+    Storage::disk('public')->put($guide->pdf_path, '%PDF-1.4');
+
+    $this->actingAs($this->user)
+        ->get("/api/v1/dispatch-guides/{$guide->id}/download-xml")
+        ->assertStatus(200);
+
+    $this->actingAs($this->user)
+        ->get("/api/v1/dispatch-guides/{$guide->id}/download-cdr")
+        ->assertStatus(200);
+
+    $this->actingAs($this->user)
+        ->get("/api/v1/dispatch-guides/{$guide->id}/download-pdf")
+        ->assertStatus(200);
+});
+
+test('devuelve 404 al descargar un XML de guía inexistente', function () {
+    $company = Company::factory()->create();
+    $branch = Branch::factory()->create(['company_id' => $company->id]);
+    $client = Client::factory()->create();
+
+    $guide = DispatchGuide::factory()->create([
+        'company_id' => $company->id,
+        'branch_id' => $branch->id,
+        'client_id' => $client->id,
+    ]);
+
+    $this->actingAs($this->user)
+        ->getJson("/api/v1/dispatch-guides/{$guide->id}/download-xml")
+        ->assertStatus(404);
 });

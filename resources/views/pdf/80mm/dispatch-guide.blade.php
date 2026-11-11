@@ -35,6 +35,12 @@
     ])
     @endif
 
+    {{-- Documentos relacionados (factura vinculada por compra) --}}
+    @include('pdf.components.dispatch-related-documents', [
+        'documentos_relacionados' => $documentos_relacionados ?? [],
+        'format' => '80mm'
+    ])
+
     {{-- Footer --}}
     @include('pdf.components.footer-ticket-exact', [
         'document' => $document,

@@ -247,7 +247,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [CreditNoteController::class, 'index']);
         Route::post('/', [CreditNoteController::class, 'store']);
         Route::get('/{id}', [CreditNoteController::class, 'show']);
+        Route::get('/{id}/download-xml', [CreditNoteController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [CreditNoteController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [CreditNoteController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [CreditNoteController::class, 'generatePdf']);
+        Route::post('/{id}/send-sunat', [CreditNoteController::class, 'sendToSunat']);
     });
 
     // ========================
@@ -258,7 +262,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [DebitNoteController::class, 'index']);
         Route::post('/', [DebitNoteController::class, 'store']);
         Route::get('/{id}', [DebitNoteController::class, 'show']);
+        Route::get('/{id}/download-xml', [DebitNoteController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DebitNoteController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DebitNoteController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [DebitNoteController::class, 'generatePdf']);
+        Route::post('/{id}/send-sunat', [DebitNoteController::class, 'sendToSunat']);
     });
 
     // ========================
@@ -270,7 +278,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [DispatchGuideController::class, 'index']);
         Route::post('/', [DispatchGuideController::class, 'store']);
         Route::get('/{id}', [DispatchGuideController::class, 'show']);
+        Route::get('/{id}/download-xml', [DispatchGuideController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DispatchGuideController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DispatchGuideController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [DispatchGuideController::class, 'generatePdf']);
+        Route::post('/{id}/send-sunat', [DispatchGuideController::class, 'sendToSunat']);
     });
 
     // ========================

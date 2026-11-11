@@ -345,6 +345,8 @@ class PdfService
 
     protected function prepareDispatchGuideData($dispatchGuide): array
     {
+        $qrBase64 = $this->generateQRCode($this->generateGuideQRData($dispatchGuide));
+
         return [
             'document' => $dispatchGuide,
             'company' => $dispatchGuide->company,
@@ -357,7 +359,34 @@ class PdfService
             'motivo_traslado' => $dispatchGuide->getMotivoTrasladoNameAttribute(),
             'modalidad_traslado' => $dispatchGuide->getModalidadTrasladoNameAttribute(),
             'peso_total_formatted' => number_format($dispatchGuide->peso_total, 3) . ' ' . $dispatchGuide->und_peso_total,
+            'documentos_relacionados' => $dispatchGuide->documentos_relacionados ?? [],
+            'qr_code' => $qrBase64,
+            'hash' => $dispatchGuide->codigo_hash ?? '',
         ];
+    }
+
+    /**
+     * Datos del QR de la guía de remisión (mismo formato que SUNAT: campos
+     * separados por '|'). El destinatario puede venir por relación o en el
+     * payload de la guía.
+     */
+    protected function generateGuideQRData($guide): string
+    {
+        $company = $guide->company;
+        $destinatario = $guide->destinatario;
+
+        $tipoDocDest = $destinatario->tipo_documento ?? '1';
+        $numDocDest = $destinatario->numero_documento ?? '';
+
+        $ruc = $company->ruc ?? '';
+        $tipoDoc = $guide->tipo_documento ?? '09';
+        $serie = $guide->serie ?? '';
+        $numero = $guide->correlativo ?? '';
+        $mtoIgv = number_format($guide->mto_igv ?? 0, 2, '.', '');
+        $mtoTotal = number_format($guide->mto_imp_venta ?? 0, 2, '.', '');
+        $fechaEmision = $guide->fecha_emision ? $guide->fecha_emision->format('Y-m-d') : date('Y-m-d');
+
+        return "{$ruc}|{$tipoDoc}|{$serie}|{$numero}|{$mtoIgv}|{$mtoTotal}|{$fechaEmision}|{$tipoDocDest}|{$numDocDest}|";
     }
 
     protected function calculateInvoiceTotals($invoice): array

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Traits\HandlesPdfGeneration;
 use App\Http\Requests\IndexCreditNoteRequest;
 use App\Http\Requests\StoreCreditNoteRequest;
 use App\Models\CreditNote;
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Storage;
 
 class CreditNoteController extends Controller
 {
+    use HandlesPdfGeneration;
+
     public function __construct(
         private DocumentService $documentService,
         private PdfService $pdfService,
@@ -140,4 +143,73 @@ class CreditNoteController extends Controller
             ], 500);
         }
     }
+    public function downloadXml($id)
+    {
+        return $this->downloadArtifact(CreditNote::findOrFail($id), 'xml');
+    }
+
+    public function downloadCdr($id)
+    {
+        return $this->downloadArtifact(CreditNote::findOrFail($id), 'cdr');
+    }
+
+    public function downloadPdf($id, Request $request)
+    {
+        return $this->downloadDocumentPdf(CreditNote::findOrFail($id), $request);
+    }
+
+    protected function downloadArtifact($document, string $tipo)
+    {
+        $download = match ($tipo) {
+            'xml' => $this->fileService->downloadXml($document),
+            'cdr' => $this->fileService->downloadCdr($document),
+            default => null,
+        };
+
+        if (! $download) {
+            return response()->json([
+                'success' => false,
+                'message' => strtoupper($tipo) . ' no encontrado',
+            ], 404);
+        }
+
+        return $download;
+    }
+
+    public function sendToSunat($id): JsonResponse
+    {
+        $doc = CreditNote::with(['company', 'branch', 'client'])->findOrFail($id);
+
+        if ($doc->estado_sunat === 'ACEPTADO') {
+            return response()->json([
+                'success' => false,
+                'message' => 'El documento ya fue enviado y aceptado por SUNAT',
+            ], 400);
+        }
+
+        $result = $this->documentService->sendToSunat($doc, 'credit_note');
+
+        if ($result['success']) {
+            return response()->json([
+                'success' => true,
+                'data' => $result['document'],
+                'message' => 'Nota de crédito enviada correctamente a SUNAT',
+            ]);
+        }
+
+        $errorMessage = 'Error desconocido';
+        if (is_object($result['error'])) {
+            $errorMessage = $result['error']->message
+                ?? (method_exists($result['error'], 'getMessage') ? $result['error']->getMessage() : $errorMessage);
+        } elseif (is_string($result['error'])) {
+            $errorMessage = $result['error'];
+        }
+
+        return response()->json([
+            'success' => false,
+            'data' => $result['document'],
+            'message' => 'Error al enviar a SUNAT: ' . $errorMessage,
+        ], 400);
+    }
+
 }

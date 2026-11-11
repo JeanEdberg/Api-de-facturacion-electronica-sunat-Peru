@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Traits\HandlesPdfGeneration;
 use App\Http\Requests\IndexDispatchGuideRequest;
 use App\Http\Requests\StoreDispatchGuideRequest;
 use App\Models\DispatchGuide;
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Storage;
 
 class DispatchGuideController extends Controller
 {
+    use HandlesPdfGeneration;
+
     public function __construct(
         private DocumentService $documentService,
         private PdfService $pdfService,
@@ -159,4 +162,69 @@ class DispatchGuideController extends Controller
             ], 500);
         }
     }
+    public function downloadXml($id)
+    {
+        return $this->downloadArtifact(DispatchGuide::findOrFail($id), 'xml');
+    }
+
+    public function downloadCdr($id)
+    {
+        return $this->downloadArtifact(DispatchGuide::findOrFail($id), 'cdr');
+    }
+
+    public function downloadPdf($id, Request $request)
+    {
+        $guia = DispatchGuide::findOrFail($id);
+        return $this->downloadDocumentPdf($guia, $request);
+    }
+
+    protected function downloadArtifact($document, string $tipo)
+    {
+        $download = match ($tipo) {
+            'xml' => $this->fileService->downloadXml($document),
+            'cdr' => $this->fileService->downloadCdr($document),
+            default => null,
+        };
+
+        if (! $download) {
+            return response()->json([
+                'success' => false,
+                'message' => strtoupper($tipo) . ' no encontrado',
+            ], 404);
+        }
+
+        return $download;
+    }
+
+    public function sendToSunat($id): JsonResponse
+    {
+        $guia = DispatchGuide::findOrFail($id);
+
+        if ($guia->estado_sunat === 'ACEPTADO') {
+            return response()->json([
+                'success' => false,
+                'message' => 'La guía ya fue enviada y aceptada por SUNAT',
+            ], 400);
+        }
+
+        $result = $this->documentService->sendDispatchGuideToSunat($guia);
+
+        if ($result['success']) {
+            return response()->json([
+                'success' => true,
+                'data' => $result['document'],
+                'message' => 'Guía de remisión enviada correctamente a SUNAT',
+            ]);
+        }
+
+        return response()->json([
+            'success' => false,
+            'data' => $result['document'] ?? null,
+            'message' => 'Error al enviar la guía a SUNAT',
+            'error' => is_object($result['error'] ?? null)
+                ? ($result['error']->message ?? $result['error']->getMessage())
+                : ($result['error'] ?? 'Error desconocido'),
+        ], 400);
+    }
+
 }
