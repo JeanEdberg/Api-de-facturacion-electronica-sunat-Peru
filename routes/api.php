@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
 use App\Http\Controllers\Api\CompraController;
+use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
 use App\Http\Controllers\Api\CompanyController;
@@ -177,6 +178,19 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/download-cdr', [CompraController::class, 'downloadCdr']);
         Route::get('/{id}/download-pdf', [CompraController::class, 'downloadPdf']);
         Route::post('/{id}/adjuntos', [CompraController::class, 'adjuntar']);
+    });
+
+    // ========================
+    // BUZÓN ELECTRÓNICO SUNAT / SUNAFIL
+    // ========================
+    // Notificaciones por empresa: alta manual, marcado como leída y
+    // sincronización contra el endpoint configurado por empresa. El listado
+    // añade `resumen` (pendientes y total) para el encabezado del panel.
+    Route::prefix('notificaciones')->group(function () {
+        Route::get('/', [NotificacionController::class, 'index']);
+        Route::post('/', [NotificacionController::class, 'store']);
+        Route::post('/sincronizar', [NotificacionController::class, 'sincronizar']);
+        Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
     });
 
     // ========================

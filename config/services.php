@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    // Buzón electrónico. SUNAT/SUNAFIL no publican un API REST público del
+    // buzón, así que la sincronización se apoya en endpoints configurables por
+    // entorno; sin ellos el alta manual sigue funcionando.
+    'buzon' => [
+        'sunat_endpoint' => env('SUNAT_BUZON_ENDPOINT'),
+        'sunafil_endpoint' => env('SUNAFIL_BUZON_ENDPOINT'),
+        'token' => env('BUZON_TOKEN'),
+    ],
+
 ];
