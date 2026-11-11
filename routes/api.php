@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\SetupController;
 use App\Http\Controllers\Api\UbigeoController;
 use App\Http\Controllers\Api\TipoCambioController;
 use App\Http\Controllers\Api\NotificacionController;
+use App\Http\Controllers\Api\CompraController;
 
 // ========================
 // RUTAS PÚBLICAS (SIN AUTENTICACIÓN)
@@ -158,6 +159,17 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/download-cdr', [BoletaController::class, 'downloadCdr']);
         Route::get('/{id}/download-pdf', [BoletaController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [BoletaController::class, 'generatePdf']);
+    });
+
+    // ========================
+    // REGISTRO DE COMPRAS (RECIBIDOS)
+    // ========================
+    Route::prefix('compras')->group(function () {
+        Route::get('/', [CompraController::class, 'index']);
+        Route::post('/', [CompraController::class, 'store']);
+        Route::post('/importar-xml', [CompraController::class, 'importarXml']);
+        Route::get('/{id}', [CompraController::class, 'show']);
+        Route::delete('/{id}', [CompraController::class, 'destroy']);
     });
 
     // ========================
