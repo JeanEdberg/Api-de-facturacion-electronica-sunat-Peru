@@ -1928,11 +1928,11 @@ class DocumentService
             
             // Guardar archivos
             if ($result['xml']) {
-                $retention->xml_path = $this->fileService->saveXml($retention, $result['xml'], 'retention');
+                $retention->xml_path = $this->fileService->saveXml($retention, $result['xml']);
             }
             
             if ($result['success'] && $result['cdr_zip']) {
-                $retention->cdr_path = $this->fileService->saveCdr($retention, $result['cdr_zip'], 'retention');
+                $retention->cdr_path = $this->fileService->saveCdr($retention, $result['cdr_zip']);
                 $retention->hash_cdr = $result['cdr_response']->getId() ?? '';
                 $retention->estado_sunat = 'ACEPTADO';
             } else {
@@ -1972,8 +1972,9 @@ class DocumentService
                            ->where('id', $data['branch_id'])
                            ->firstOrFail();
             
-            // Obtener siguiente correlativo para la fecha
-            $correlativo = $this->getNextVoidedDocumentCorrelative($company->id, $data['fecha_referencia']);
+            // Obtener siguiente correlativo para la fecha de comunicación
+            $fechaComunicacion = now()->toDateString();
+            $correlativo = $this->getNextVoidedDocumentCorrelative($company->id, $fechaComunicacion);
             
             // Crear comunicación de baja
             $voidedDocument = VoidedDocument::create([
@@ -1981,7 +1982,7 @@ class DocumentService
                 'branch_id' => $branch->id,
                 'tipo_documento' => 'RA',
                 'correlativo' => $correlativo,
-                'fecha_emision' => now()->toDateString(), // Fecha de comunicación (hoy)
+                'fecha_emision' => $fechaComunicacion, // Fecha de comunicación (hoy)
                 'fecha_referencia' => $data['fecha_referencia'], // Fecha de documentos a anular
                 'ubl_version' => $data['ubl_version'] ?? '2.0',
                 'detalles' => $data['detalles'],
@@ -2197,11 +2198,11 @@ class DocumentService
         ];
     }
 
-    protected function getNextVoidedDocumentCorrelative(int $companyId, string $fechaReferencia): string
+    protected function getNextVoidedDocumentCorrelative(int $companyId, string $fechaEmision): string
     {
-        // Obtener el último correlativo para la fecha de referencia
+        // El correlativo del RA es por fecha de comunicación.
         $lastVoided = VoidedDocument::where('company_id', $companyId)
-                                  ->whereDate('fecha_referencia', $fechaReferencia)
+                                  ->whereDate('fecha_emision', $fechaEmision)
                                   ->orderBy('correlativo', 'desc')
                                   ->first();
         

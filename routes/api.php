@@ -5,6 +5,8 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
 use App\Http\Controllers\Api\DailySummaryController;
+use App\Http\Controllers\Api\RetentionController;
+use App\Http\Controllers\Api\VoidedDocumentController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
 use App\Http\Controllers\Api\CompanyController;
@@ -181,6 +183,32 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/check-status', [DailySummaryController::class, 'checkStatus']);
         Route::get('/{id}/download-xml', [DailySummaryController::class, 'downloadXml']);
         Route::get('/{id}/download-cdr', [DailySummaryController::class, 'downloadCdr']);
+    });
+
+    // ========================
+    // RETENCIONES (TIPO 20)
+    // ========================
+    Route::prefix('retentions')->group(function () {
+        Route::get('/', [RetentionController::class, 'index']);
+        Route::post('/', [RetentionController::class, 'store']);
+        Route::get('/{id}', [RetentionController::class, 'show']);
+        Route::post('/{id}/send-sunat', [RetentionController::class, 'sendToSunat']);
+        Route::get('/{id}/download-xml', [RetentionController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [RetentionController::class, 'downloadCdr']);
+    });
+
+    // ========================
+    // COMUNICACIÓN DE BAJA (ANULACIONES)
+    // ========================
+    Route::prefix('voided-documents')->group(function () {
+        Route::get('/candidates', [VoidedDocumentController::class, 'candidates']);
+        Route::get('/', [VoidedDocumentController::class, 'index']);
+        Route::post('/', [VoidedDocumentController::class, 'store']);
+        Route::get('/{id}', [VoidedDocumentController::class, 'show']);
+        Route::post('/{id}/send-sunat', [VoidedDocumentController::class, 'sendToSunat']);
+        Route::post('/{id}/check-status', [VoidedDocumentController::class, 'checkStatus']);
+        Route::get('/{id}/download-xml', [VoidedDocumentController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [VoidedDocumentController::class, 'downloadCdr']);
     });
 
     // ========================

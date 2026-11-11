@@ -72,8 +72,9 @@ class FileService
                 '07' => 'notas-credito',
                 '08' => 'notas-debito',
                 '09' => 'guias-remision',
-                '20' => 'percepciones',
-                '21' => 'retenciones',
+                '20' => 'retenciones',
+                '40' => 'percepciones',
+                'RA' => 'resumenes-bajas',
                 default => 'otros-comprobantes'
             };
         }
@@ -88,7 +89,10 @@ class FileService
             'DispatchGuide' => 'guias-remision',
             'Percepcion' => 'percepciones',
             'Retencion' => 'retenciones',
+            'Retention' => 'retenciones',
             'DailySummary' => 'resumenes-diarios',
+            'Voided' => 'resumenes-bajas',
+            'VoidedDocument' => 'resumenes-bajas',
             default => 'otros-comprobantes'
         };
     }
@@ -174,6 +178,7 @@ class FileService
             'percepciones',
             'retenciones',
             'resumenes-diarios',
+            'resumenes-bajas',
             'otros-comprobantes'
         ];
         
