@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
+use App\Http\Controllers\Api\CompraController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
 use App\Http\Controllers\Api\CompanyController;
@@ -158,6 +159,24 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/download-cdr', [BoletaController::class, 'downloadCdr']);
         Route::get('/{id}/download-pdf', [BoletaController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [BoletaController::class, 'generatePdf']);
+    });
+
+    // ========================
+    // REGISTRO DE COMPRAS (COMPROBANTES RECIBIDOS)
+    // ========================
+    // Comprobantes de proveedores: alta manual, importación del XML UBL y
+    // artefactos (XML/CDR/PDF). No se envían a SUNAT; alimentan el Registro
+    // de Compras (PLE 8.1 / RCE del SIRE).
+    Route::prefix('compras')->group(function () {
+        Route::get('/', [CompraController::class, 'index']);
+        Route::post('/', [CompraController::class, 'store']);
+        Route::post('/importar-xml', [CompraController::class, 'importarXml']);
+        Route::get('/{id}', [CompraController::class, 'show']);
+        Route::delete('/{id}', [CompraController::class, 'destroy']);
+        Route::get('/{id}/download-xml', [CompraController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [CompraController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [CompraController::class, 'downloadPdf']);
+        Route::post('/{id}/adjuntos', [CompraController::class, 'adjuntar']);
     });
 
     // ========================
