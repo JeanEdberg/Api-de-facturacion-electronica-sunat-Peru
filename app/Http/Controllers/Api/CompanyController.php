@@ -254,6 +254,13 @@ class CompanyController extends Controller
         $validatedData['modo_produccion'] = $this->processBoolean($validatedData['modo_produccion'] ?? false);
         $validatedData['activo'] = $this->processBoolean($validatedData['activo'] ?? true);
 
+        // Beneficio de Amazonía (Ley 27037): solo aplica el tipo de leyenda si la
+        // empresa está marcada como contribuyente de la Amazonía.
+        $validatedData['contribuyente_amazonia'] = $this->processBoolean($validatedData['contribuyente_amazonia'] ?? false);
+        if (!$validatedData['contribuyente_amazonia']) {
+            $validatedData['tipo_amazonia'] = null;
+        }
+
         // Procesar archivos
         if ($request->hasFile('certificado_pem')) {
             $validatedData['certificado_pem'] = $this->storeFile($request->file('certificado_pem'), 'certificado', 'certificado.pem');
