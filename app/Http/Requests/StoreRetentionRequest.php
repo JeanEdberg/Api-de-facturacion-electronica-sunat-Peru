@@ -18,7 +18,7 @@ class StoreRetentionRequest extends FormRequest
             'company_id' => 'required|exists:companies,id',
             'branch_id' => 'required|exists:branches,id',
             'serie' => 'required|string|max:4',
-            'correlativo' => 'required|string|max:8',
+            'correlativo' => 'nullable|string|max:8',
             'fecha_emision' => 'required|date',
             'moneda' => 'required|string|in:PEN,USD',
             

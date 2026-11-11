@@ -147,6 +147,8 @@ class RolesAndPermissionsSeeder extends Seeder
 
         // Usuario de prueba para company admin
         $companyAdminRole = Role::where('name', 'company_admin')->first();
+        // La empresa puede no existir en instalaciones ya pobladas: se usa la primera.
+        $companyId = \App\Models\Company::query()->value('id');
         
         User::updateOrCreate(
             ['email' => 'company@sunatapi.com'],
@@ -154,7 +156,7 @@ class RolesAndPermissionsSeeder extends Seeder
                 'name' => 'Administrador de Empresa',
                 'password' => Hash::make('company123456'),
                 'role_id' => $companyAdminRole->id,
-                'company_id' => 1, // Asumiendo que existe empresa con ID 1
+                'company_id' => $companyId,
                 'user_type' => 'user',
                 'active' => true,
                 'email_verified_at' => now(),
@@ -170,7 +172,7 @@ class RolesAndPermissionsSeeder extends Seeder
                 'name' => 'Cliente API',
                 'password' => Hash::make('api123456'),
                 'role_id' => $apiClientRole->id,
-                'company_id' => 1,
+                'company_id' => $companyId,
                 'user_type' => 'api_client',
                 'active' => true,
                 'email_verified_at' => now(),
