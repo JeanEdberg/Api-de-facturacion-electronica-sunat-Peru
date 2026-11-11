@@ -98,6 +98,22 @@ test('lista las notificaciones de la empresa del usuario', function () {
         ->assertJsonPath('data.data.0.asunto', 'Propia');
 });
 
+test('el resumen respeta el filtro de entidad', function () {
+    Notificacion::factory()->create(['company_id' => $this->company->id, 'entidad' => 'SUNAT', 'estado' => 'pendiente']);
+    Notificacion::factory()->create(['company_id' => $this->company->id, 'entidad' => 'SUNAFIL', 'estado' => 'pendiente']);
+
+    $this->actingAs($this->user)
+        ->getJson('/api/v1/notificaciones?entidad=SUNAT')
+        ->assertOk()
+        ->assertJsonPath('resumen.total', 1)
+        ->assertJsonPath('resumen.pendientes', 1);
+
+    $this->actingAs($this->user)
+        ->getJson('/api/v1/notificaciones')
+        ->assertOk()
+        ->assertJsonPath('resumen.total', 2);
+});
+
 test('registra una notificación manualmente y evita duplicados', function () {
     $payload = [
         'company_id' => $this->company->id,

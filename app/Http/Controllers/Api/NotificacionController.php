@@ -59,8 +59,8 @@ class NotificacionController extends Controller
             'message' => 'Notificaciones obtenidas correctamente.',
             'data' => $notificaciones,
             'resumen' => [
-                'pendientes' => $this->contar($request, Notificacion::ESTADO_PENDIENTE),
-                'total' => $this->contar($request, null),
+                'pendientes' => $this->contar($request, Notificacion::ESTADO_PENDIENTE, $request->entidad),
+                'total' => $this->contar($request, null, $request->entidad),
             ],
         ]);
     }
@@ -187,7 +187,7 @@ class NotificacionController extends Controller
         ], 403);
     }
 
-    protected function contar(Request $request, ?string $estado): int
+    protected function contar(Request $request, ?string $estado, ?string $entidad = null): int
     {
         $query = Notificacion::query();
 
@@ -195,6 +195,10 @@ class NotificacionController extends Controller
             $query->where('company_id', $request->integer('company_id'));
         } elseif (! $request->user()->hasRole('super_admin')) {
             $query->where('company_id', $request->user()->company_id);
+        }
+
+        if ($entidad !== null && $entidad !== '') {
+            $query->where('entidad', $entidad);
         }
 
         if ($estado !== null) {
