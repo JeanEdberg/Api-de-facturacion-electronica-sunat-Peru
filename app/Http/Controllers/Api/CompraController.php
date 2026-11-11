@@ -94,7 +94,7 @@ class CompraController extends Controller
     {
         $request->validate([
             'company_id' => 'required|integer|exists:companies,id',
-            'xml' => 'required|file|mimetypes:text/xml,application/xml,text/plain|max:2048',
+            'xml' => 'required|file|mimetypes:text/xml,application/xml,text/plain,application/octet-stream|max:2048',
         ]);
 
         $companyId = $this->resolverEmpresa($request, $request->integer('company_id'));
