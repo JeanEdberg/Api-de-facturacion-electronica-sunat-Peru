@@ -4,9 +4,14 @@ use App\Models\CreditNote;
 use App\Models\Company;
 use App\Models\Branch;
 use App\Models\Client;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
+
+beforeEach(function () {
+    $this->user = User::factory()->create();
+});
 
 test('puede crear una nota de crédito básica', function () {
     // Preparar datos de prueba
@@ -42,7 +47,7 @@ test('puede crear una nota de crédito básica', function () {
         ]
     ];
 
-    $response = $this->postJson('/api/v1/credit-notes', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/credit-notes', $data);
 
     $response->assertStatus(201)
             ->assertJson([
@@ -98,7 +103,7 @@ test('puede crear una nota de crédito con forma de pago a crédito', function (
         ]
     ];
 
-    $response = $this->postJson('/api/v1/credit-notes', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/credit-notes', $data);
 
     $response->assertStatus(201)
             ->assertJson([
@@ -150,7 +155,7 @@ test('puede crear una nota de crédito con guías relacionadas', function () {
         ]
     ];
 
-    $response = $this->postJson('/api/v1/credit-notes', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/credit-notes', $data);
 
     $response->assertStatus(201);
 
@@ -192,14 +197,14 @@ test('valida motivos correctos de nota de crédito', function () {
         ]
     ];
 
-    $response = $this->postJson('/api/v1/credit-notes', $data);
+    $response = $this->actingAs($this->user)->postJson('/api/v1/credit-notes', $data);
 
     $response->assertStatus(422)
             ->assertJsonValidationErrors('cod_motivo');
 });
 
 test('puede obtener el catálogo de motivos', function () {
-    $response = $this->getJson('/api/v1/credit-notes/catalogs/motivos');
+    $response = $this->actingAs($this->user)->getJson('/api/v1/credit-notes/catalogs/motivos');
 
     $response->assertStatus(200)
             ->assertJson([
@@ -233,7 +238,7 @@ test('puede listar notas de crédito con filtros', function () {
         'estado_sunat' => 'ACEPTADO'
     ]);
 
-    $response = $this->getJson("/api/v1/credit-notes?company_id={$company->id}&estado_sunat=PENDIENTE");
+    $response = $this->actingAs($this->user)->getJson("/api/v1/credit-notes?company_id={$company->id}&estado_sunat=PENDIENTE");
 
     $response->assertStatus(200)
             ->assertJson([

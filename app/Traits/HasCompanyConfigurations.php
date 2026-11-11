@@ -43,6 +43,21 @@ trait HasCompanyConfigurations
      */
     public function getConfig(string $configType, string $environment = null, string $serviceType = null, $default = null)
     {
+        // Las credenciales GRE se guardan en columnas de companies, no en la tabla
+        // de configuraciones, así que se resuelven aquí para mantener el mismo
+        // contrato de lectura (p. ej. getConfig('credenciales_gre.beta')).
+        if (str_starts_with($configType, 'credenciales_gre')) {
+            $modo = str_contains($configType, '.')
+                ? explode('.', $configType)[1]
+                : ($this->modo_produccion ? 'produccion' : 'beta');
+
+            // Leer siempre del estado persistido para reflejar cambios hechos
+            // por otras instancias del modelo (p. ej. vía API).
+            $fresh = $this->exists ? static::find($this->getKey()) : null;
+
+            return ($fresh ?? $this)->greCredentialsForMode($modo);
+        }
+
         $environment = $environment ?? ($this->modo_produccion ? 'produccion' : 'beta');
         $cacheKey = $this->getConfigCacheKey("{$configType}_{$environment}_{$serviceType}");
 
@@ -193,14 +208,24 @@ trait HasCompanyConfigurations
     public function getGreCredentials(): array
     {
         $environment = $this->modo_produccion ? 'produccion' : 'beta';
-        
+
+        return $this->greCredentialsForMode($environment) + ['environment' => $environment];
+    }
+
+    /**
+     * Credenciales GRE de un ambiente concreto (beta|produccion).
+     */
+    public function greCredentialsForMode(string $modo): array
+    {
+        $clientId = $modo === 'produccion' ? $this->gre_client_id_produccion : $this->gre_client_id_beta;
+        $clientSecret = $modo === 'produccion' ? $this->gre_client_secret_produccion : $this->gre_client_secret_beta;
+
         return [
-            'client_id' => $this->getGreClientId(),
-            'client_secret' => $this->getGreClientSecret(),
-            'ruc_proveedor' => $this->getGreRucProveedor(),
-            'usuario_sol' => $this->getGreUsuarioSol(),
-            'clave_sol' => $this->getGreClaveSol(),
-            'environment' => $environment
+            'client_id' => $clientId,
+            'client_secret' => $clientSecret,
+            'ruc_proveedor' => $this->gre_ruc_proveedor ?? $this->ruc,
+            'usuario_sol' => $this->gre_usuario_sol ?? $this->usuario_sol,
+            'clave_sol' => $this->gre_clave_sol ?? $this->clave_sol,
         ];
     }
 
@@ -262,9 +287,13 @@ trait HasCompanyConfigurations
     /**
      * Configurar credenciales GRE para un ambiente específico
      */
-    public function setGreCredentials(array $credentials, string $environment = null): void
+    public function setGreCredentials(string $modo, array $credentials): void
     {
-        $environment = $environment ?? ($this->modo_produccion ? 'produccion' : 'beta');
+        if (! in_array($modo, ['beta', 'produccion'], true)) {
+            throw new \InvalidArgumentException("El ambiente debe ser 'beta' o 'produccion'.");
+        }
+
+        $environment = $modo;
         
         $updateData = [];
         
@@ -332,7 +361,7 @@ trait HasCompanyConfigurations
             'client_secret' => $fromClientSecret
         ];
         
-        $this->setGreCredentials($credentials, $toEnvironment);
+        $this->setGreCredentials($toEnvironment, $credentials);
         
         return true;
     }
