@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\ScopesByCompany;
 use App\Http\Requests\Company\StoreCompanyRequest;
 use App\Http\Requests\Company\UpdateCompanyRequest;
 use App\Models\Company;
@@ -15,13 +16,15 @@ use Exception;
 
 class CompanyController extends Controller
 {
+    use ScopesByCompany;
+
     /**
      * Listar todas las empresas
      */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
         try {
-            $companies = Company::active()
+            $companies = $this->scopeToUserCompany(Company::active(), $request, 'id')
                 ->with(['branches'])
                 ->select([
                     'id', 'ruc', 'razon_social', 'nombre_comercial', 
@@ -73,6 +76,10 @@ class CompanyController extends Controller
      */
     public function show(Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany(request()->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $company->load([
                 'branches',
@@ -104,6 +111,10 @@ class CompanyController extends Controller
      */
     public function update(UpdateCompanyRequest $request, Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany($request->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $validatedData = $this->processRequestData($request);
             $company->update($validatedData);
@@ -135,6 +146,10 @@ class CompanyController extends Controller
      */
     public function destroy(Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany(request()->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             if ($this->hasAssociatedDocuments($company)) {
                 return response()->json([
@@ -170,6 +185,10 @@ class CompanyController extends Controller
      */
     public function activate(Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany(request()->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $company->update(['activo' => true]);
 
@@ -199,6 +218,10 @@ class CompanyController extends Controller
      */
     public function toggleProductionMode(Request $request, Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany($request->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $validator = Validator::make($request->all(), [
                 'modo_produccion' => 'required|boolean'

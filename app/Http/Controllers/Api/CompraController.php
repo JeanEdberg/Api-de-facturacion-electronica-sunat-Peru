@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\ScopesByCompany;
 use App\Http\Requests\StoreCompraRequest;
 use App\Models\Compra;
 use App\Models\Company;
@@ -20,6 +21,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class CompraController extends Controller
 {
+    use ScopesByCompany;
+
     public function __construct(private CompraService $compraService)
     {
     }
@@ -27,10 +30,7 @@ class CompraController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Compra::query();
-
-        if ($request->filled('company_id')) {
-            $query->where('company_id', $request->company_id);
-        }
+        $this->scopeToUserCompany($query, $request);
 
         if ($request->filled('estado_sunat')) {
             $query->where('estado_sunat', $request->estado_sunat);

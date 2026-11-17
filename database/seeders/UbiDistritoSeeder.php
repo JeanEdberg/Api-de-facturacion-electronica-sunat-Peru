@@ -20,9 +20,14 @@ class UbiDistritoSeeder extends Seeder
             return;
         }
         
-        // Temporalmente desactivar las restricciones de clave foránea
-        \DB::statement('SET FOREIGN_KEY_CHECKS=0;');
-        
+        // SQLite y MySQL desactivan las FK de forma distinta; se soportan ambas.
+        $driver = \DB::connection()->getDriverName();
+        if ($driver === 'sqlite') {
+            \DB::statement('PRAGMA foreign_keys = OFF;');
+        } else {
+            \DB::statement('SET FOREIGN_KEY_CHECKS=0;');
+        }
+
         $file = fopen($filePath, 'r');
         $header = fgetcsv($file, 0, '|'); // Skip header line
         
@@ -56,9 +61,13 @@ class UbiDistritoSeeder extends Seeder
         }
         
         fclose($file);
-        
+
         // Reactivar las restricciones de clave foránea
-        \DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+        if ($driver === 'sqlite') {
+            \DB::statement('PRAGMA foreign_keys = ON;');
+        } else {
+            \DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+        }
         
         $this->command->info("Successfully imported {$count} districts from data_ubi.txt");
     }

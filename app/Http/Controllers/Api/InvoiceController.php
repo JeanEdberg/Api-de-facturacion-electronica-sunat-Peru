@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\ScopesByCompany;
 use App\Http\Controllers\Traits\HandlesPdfGeneration;
 use App\Services\DocumentService;
 use App\Services\FileService;
@@ -14,6 +15,8 @@ use Illuminate\Http\JsonResponse;
 
 class InvoiceController extends Controller
 {
+    use ScopesByCompany;
+
     use HandlesPdfGeneration;
     protected $documentService;
     protected $fileService;
@@ -28,12 +31,9 @@ class InvoiceController extends Controller
     {
         try {
             $query = Invoice::with(['company', 'branch', 'client']);
+            $this->scopeToUserCompany($query, $request);
 
             // Filtros
-            if ($request->has('company_id')) {
-                $query->where('company_id', $request->company_id);
-            }
-
             if ($request->has('branch_id')) {
                 $query->where('branch_id', $request->branch_id);
             }

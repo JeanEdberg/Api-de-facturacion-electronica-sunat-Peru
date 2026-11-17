@@ -61,11 +61,15 @@ test('certificadoContenido acepta una ruta legacy del disco public', function ()
 });
 
 test('subir el certificado guarda el contenido PEM en la empresa, no una ruta fija', function () {
-    $user = \App\Models\User::factory()->create();
     $company = Company::factory()->create(['ruc' => '20100000005']);
+    $user = \App\Models\User::factory()->create(['company_id' => $company->id]);
 
     $pem = pemEmpresa(365);
-    $archivo = \Illuminate\Http\UploadedFile::fake()->createWithContent('cert.pem', $pem);
+    // Archivo real en disco: la validación de tipo ve el mismo contenido que
+    // en producción (un .pem subido por multipart).
+    $ruta = tempnam(sys_get_temp_dir(), 'inmoa') . '.pem';
+    file_put_contents($ruta, $pem);
+    $archivo = new \Illuminate\Http\UploadedFile($ruta, 'cert.pem', 'application/x-pem-file', null, true);
 
     $this->actingAs($user)
         ->put("/api/v1/companies/{$company->id}", [
@@ -80,7 +84,10 @@ test('subir el certificado guarda el contenido PEM en la empresa, no una ruta fi
             'usuario_sol' => 'MODDATOS',
             'clave_sol' => 'MODDATOS',
             'certificado_pem' => $archivo,
-        ]);
+        ])
+        ->assertOk();
+
+    @unlink($ruta);
 
     $company->refresh();
 
@@ -89,11 +96,12 @@ test('subir el certificado guarda el contenido PEM en la empresa, no una ruta fi
 });
 
 test('actualizar solo las credenciales SOL no exige los datos fiscales (panel Accesos SOL)', function () {
-    $user = \App\Models\User::factory()->create();
     $company = Company::factory()->create([
         'ruc' => '20100000006',
         'modo_produccion' => true,
     ]);
+    // El panel lo usa el administrador de esa misma empresa.
+    $user = \App\Models\User::factory()->create(['company_id' => $company->id]);
 
     // Archivo real en disco: el panel sube el .pem tal cual (multipart), y así
     // la validación de tipo ve el mismo contenido que en producción.
