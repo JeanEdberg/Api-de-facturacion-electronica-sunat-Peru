@@ -20,11 +20,12 @@ class UbiDistritoSeeder extends Seeder
             return;
         }
         
-        // SQLite y MySQL desactivan las FK de forma distinta; se soportan ambas.
+        // Cada motor desactiva las claves foráneas a su manera. En PostgreSQL
+        // no hace falta: regiones y provincias ya están sembradas antes.
         $driver = \DB::connection()->getDriverName();
         if ($driver === 'sqlite') {
             \DB::statement('PRAGMA foreign_keys = OFF;');
-        } else {
+        } elseif ($driver === 'mysql' || $driver === 'mariadb') {
             \DB::statement('SET FOREIGN_KEY_CHECKS=0;');
         }
 
@@ -65,7 +66,7 @@ class UbiDistritoSeeder extends Seeder
         // Reactivar las restricciones de clave foránea
         if ($driver === 'sqlite') {
             \DB::statement('PRAGMA foreign_keys = ON;');
-        } else {
+        } elseif ($driver === 'mysql' || $driver === 'mariadb') {
             \DB::statement('SET FOREIGN_KEY_CHECKS=1;');
         }
         
