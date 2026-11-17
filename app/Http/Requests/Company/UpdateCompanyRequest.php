@@ -16,25 +16,30 @@ class UpdateCompanyRequest extends FormRequest
     {
         $companyId = $this->route('company')->id ?? null;
 
+        // La actualización es parcial: el panel "Accesos SOL" solo envía las
+        // credenciales y el certificado, sin repetir los datos fiscales. Los
+        // campos obligatorios del alta pasan a "sometimes": solo se validan si
+        // vienen en la petición.
         return [
             'ruc' => [
+                'sometimes',
                 'required',
                 'string',
                 'size:11',
                 Rule::unique('companies', 'ruc')->ignore($companyId),
             ],
-            'razon_social' => 'required|string|max:255',
+            'razon_social' => 'sometimes|required|string|max:255',
             'nombre_comercial' => 'nullable|string|max:255',
-            'direccion' => 'required|string|max:255',
-            'ubigeo' => 'required|string|size:6',
-            'distrito' => 'required|string|max:100',
-            'provincia' => 'required|string|max:100',
-            'departamento' => 'required|string|max:100',
+            'direccion' => 'sometimes|required|string|max:255',
+            'ubigeo' => 'sometimes|required|string|size:6',
+            'distrito' => 'sometimes|required|string|max:100',
+            'provincia' => 'sometimes|required|string|max:100',
+            'departamento' => 'sometimes|required|string|max:100',
             'telefono' => 'nullable|string|max:20',
-            'email' => 'required|email|max:255',
+            'email' => 'sometimes|required|email|max:255',
             'web' => 'nullable|url|max:255',
-            'usuario_sol' => 'required|string|max:50',
-            'clave_sol' => 'required|string|max:100',
+            'usuario_sol' => 'sometimes|required|string|max:50',
+            'clave_sol' => 'sometimes|required|string|max:100',
             'certificado_pem' => 'nullable|file|mimes:pem,crt,cer,txt|max:2048',
             'certificado_password' => 'nullable|string|max:100',
             'endpoint_beta' => 'nullable|url|max:255',

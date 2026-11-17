@@ -88,6 +88,48 @@ test('subir el certificado guarda el contenido PEM en la empresa, no una ruta fi
         ->and($company->certificado_pem)->not->toContain('certificado/certificado.pem');
 });
 
+test('actualizar solo las credenciales SOL no exige los datos fiscales (panel Accesos SOL)', function () {
+    $user = \App\Models\User::factory()->create();
+    $company = Company::factory()->create([
+        'ruc' => '20100000006',
+        'modo_produccion' => true,
+    ]);
+
+    // Archivo real en disco: el panel sube el .pem tal cual (multipart), y así
+    // la validación de tipo ve el mismo contenido que en producción.
+    $ruta = tempnam(sys_get_temp_dir(), 'inmoa') . '.pem';
+    file_put_contents($ruta, pemEmpresa(365));
+    $archivo = new \Illuminate\Http\UploadedFile($ruta, 'inmoa.pem', 'application/x-pem-file', null, true);
+
+    $this->actingAs($user)
+        ->put("/api/v1/companies/{$company->id}", [
+            'usuario_sol' => 'MODDATOS',
+            'certificado_pem' => $archivo,
+        ])
+        ->assertOk()
+        ->assertJsonPath('success', true);
+
+    $company->refresh();
+    @unlink($ruta);
+
+    expect($company->certificado_pem)->toContain('BEGIN CERTIFICATE')
+        ->and($company->usuario_sol)->toBe('MODDATOS')
+        // La actualización parcial no debe apagar el modo producción ni borrar datos fiscales.
+        ->and($company->modo_produccion)->toBeTrue()
+        ->and($company->razon_social)->not->toBeNull()
+        ->and($company->activo)->toBeTrue();
+});
+
+test('/auth/me expone el company_id de la sesión', function () {
+    $company = Company::factory()->create(['ruc' => '20100000007']);
+    $user = \App\Models\User::factory()->create(['company_id' => $company->id]);
+
+    $this->actingAs($user)
+        ->getJson('/api/v1/auth/me')
+        ->assertOk()
+        ->assertJsonPath('user.company_id', $company->id);
+});
+
 test('CertificadoService lee el vencimiento del certificado de la empresa', function () {
     $company = Company::factory()->create([
         'certificado_pem' => pemEmpresa(20),

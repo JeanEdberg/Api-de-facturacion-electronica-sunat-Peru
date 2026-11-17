@@ -251,15 +251,23 @@ class CompanyController extends Controller
     {
         $validatedData = $request->validated();
 
-        // Procesar booleanos
-        $validatedData['modo_produccion'] = $this->processBoolean($validatedData['modo_produccion'] ?? false);
-        $validatedData['activo'] = $this->processBoolean($validatedData['activo'] ?? true);
+        // Actualización parcial: solo se tocan los booleanos que vienen en la
+        // petición, para no desactivar el modo producción (o reactivar la
+        // empresa) al actualizar únicamente el certificado.
+        if ($request->has('modo_produccion')) {
+            $validatedData['modo_produccion'] = $this->processBoolean($validatedData['modo_produccion']);
+        }
+        if ($request->has('activo')) {
+            $validatedData['activo'] = $this->processBoolean($validatedData['activo']);
+        }
 
         // Beneficio de Amazonía (Ley 27037): solo aplica el tipo de leyenda si la
         // empresa está marcada como contribuyente de la Amazonía.
-        $validatedData['contribuyente_amazonia'] = $this->processBoolean($validatedData['contribuyente_amazonia'] ?? false);
-        if (!$validatedData['contribuyente_amazonia']) {
-            $validatedData['tipo_amazonia'] = null;
+        if ($request->has('contribuyente_amazonia')) {
+            $validatedData['contribuyente_amazonia'] = $this->processBoolean($validatedData['contribuyente_amazonia']);
+            if (!$validatedData['contribuyente_amazonia']) {
+                $validatedData['tipo_amazonia'] = null;
+            }
         }
 
         // Procesar archivos

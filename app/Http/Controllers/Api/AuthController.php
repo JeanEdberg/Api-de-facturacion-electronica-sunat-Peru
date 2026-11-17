@@ -154,6 +154,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role ? $user->role->display_name : 'Sin rol',
+                'company_id' => $user->company_id,
                 'company' => $user->company ? $user->company->razon_social : null,
                 'permissions' => $user->getAllPermissions(),
                 'last_login_at' => $user->last_login_at,
