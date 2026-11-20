@@ -58,12 +58,14 @@ intento por petición. Si la clave está mal, hay que corregirla, no insistir.
 """
 
 import http.cookiejar
+import hashlib
 import json
 import os
 import re
 import socket
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -82,6 +84,11 @@ NAVEGADOR = (
 
 PUERTO = int(os.environ.get("BUZON_BRIDGE_PORT", "12002"))
 RUTA_BUZON = "/buzon"
+
+# Se calcula al importar, así que cambiar el código sin reiniciar el proceso
+# deja una huella distinta en cada respuesta y el error se ve al instante.
+HUELLA = hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:12]
+ARRANQUE = time.strftime("%Y-%m-%d %H:%M:%S")
 HOST = os.environ.get("BUZON_BRIDGE_HOST", "0.0.0.0")
 TOKEN = os.environ.get("BUZON_BRIDGE_TOKEN", "")
 
@@ -1224,6 +1231,7 @@ def leer_buzon_sunafil(ruc, usuario, clave):
         raise SolError(
             "No se pudo leer ninguna bandeja de la casilla de SUNAFIL.",
             detalle=(
+                f"[puente {HUELLA} arrancado {ARRANQUE}] "
                 f"code={code[:12]}… state={state}. "
                 + " | ".join(f"{k}: {v}" for k, v in errores.items())
             ),
@@ -1299,6 +1307,8 @@ class Manejador(BaseHTTPRequestHandler):
                 200,
                 {
                     "puente": "ok",
+                    "huella": HUELLA,
+                    "arrancado": ARRANQUE,
                     "sunat_alcanzable": alcanzable,
                     "sunafil_alcanzable": sunda[0],
                     "sunafil_tls": sunda[1],
@@ -1310,6 +1320,8 @@ class Manejador(BaseHTTPRequestHandler):
                 502,
                 {
                     "puente": "ok",
+                    "huella": HUELLA,
+                    "arrancado": ARRANQUE,
                     "sunat_alcanzable": False,
                     "error": e.mensaje,
                     "detalle": e.detalle,
@@ -1425,6 +1437,7 @@ def main(argv=None):
         f"(token {'sí' if TOKEN else 'no'})",
         flush=True,
     )
+    print(f"[sol-bridge] huella {HUELLA} · arrancado {ARRANQUE}", flush=True)
     try:
         servidor.serve_forever()
     except KeyboardInterrupt:
