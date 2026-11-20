@@ -538,5 +538,52 @@ class AbrirBandejaSunafilTest(unittest.TestCase):
         self.assertIn("formMenu2:a:1", datos)
 
 
+class PostAjaxTest(unittest.TestCase):
+    """JSF solo ejecuta la acción si el POST se declara parcial."""
+
+    def _capturar(self, metodo):
+        sesion = puente.Sesion()
+        capturado = {}
+
+        class Falso:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"ok"
+
+            def geturl(self):
+                return "https://x"
+
+        def abrir(peticion, timeout=None):
+            capturado["cabeceras"] = dict(peticion.header_items())
+            capturado["cuerpo"] = urllib.parse.parse_qs(
+                peticion.data.decode()
+            )
+            return Falso()
+
+        sesion.opener.open = abrir
+        metodo(sesion)
+        return capturado
+
+    def test_post_ajax_declara_la_peticion_parcial(self):
+        capturado = self._capturar(
+            lambda s: s.post_ajax("https://x", {"a": "1"})
+        )
+
+        self.assertEqual(capturado["cabeceras"]["Faces-request"], "partial/ajax")
+        self.assertEqual(capturado["cuerpo"]["javax.faces.partial.ajax"], ["true"])
+        self.assertEqual(capturado["cuerpo"]["a"], ["1"])
+
+    def test_el_post_normal_no_se_declara_parcial(self):
+        capturado = self._capturar(lambda s: s.post("https://x", {"a": "1"}))
+
+        self.assertNotIn("Faces-request", capturado["cabeceras"])
+        self.assertNotIn("javax.faces.partial.ajax", capturado["cuerpo"])
+
+
 if __name__ == "__main__":
     unittest.main()

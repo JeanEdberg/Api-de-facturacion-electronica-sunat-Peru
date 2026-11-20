@@ -239,11 +239,7 @@ class Sesion:
                 detalle=str(e),
             )
 
-    def post(self, url, datos):
-        cuerpo = urllib.parse.urlencode(datos).encode()
-        peticion = urllib.request.Request(url, data=cuerpo, method="POST")
-        peticion.add_header("Content-Type", "application/x-www-form-urlencoded")
-        peticion.add_header("Referer", url)
+    def _enviar(self, peticion):
         try:
             with self.opener.open(peticion, timeout=self.timeout) as r:
                 return r.geturl(), r.read().decode("utf-8", "ignore")
@@ -253,6 +249,35 @@ class Sesion:
             raise SolError("No se pudo enviar el login a SUNAT.", detalle=str(e.reason))
         except OSError as e:
             raise SolError("SUNAT cortó la conexión durante el login.", detalle=str(e))
+
+    def post(self, url, datos):
+        """POST de formulario normal: JSF responde con la página completa."""
+        peticion = urllib.request.Request(
+            url, data=urllib.parse.urlencode(datos).encode(), method="POST"
+        )
+        peticion.add_header("Content-Type", "application/x-www-form-urlencoded")
+        peticion.add_header("Referer", url)
+        return self._enviar(peticion)
+
+    def post_ajax(self, url, datos):
+        """POST de JSF parcial: responde XML con solo los trozos actualizados.
+
+        Es lo que hace `PrimeFaces.ab` y sus equivalentes: sin estas cabeceras
+        el servidor restaura la vista y devuelve la misma página, que es
+        justo el síntoma de que la acción no se ejecutó.
+        """
+        datos = dict(datos)
+        datos["javax.faces.partial.ajax"] = "true"
+        peticion = urllib.request.Request(
+            url, data=urllib.parse.urlencode(datos).encode(), method="POST"
+        )
+        peticion.add_header(
+            "Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"
+        )
+        peticion.add_header("Faces-Request", "partial/ajax")
+        peticion.add_header("X-Requested-With", "XMLHttpRequest")
+        peticion.add_header("Referer", url)
+        return self._enviar(peticion)
 
 
 def _base_oauth(url):
