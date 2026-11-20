@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\ScopesByCompany;
 use App\Models\Client;
 use App\Models\Company;
 use Illuminate\Http\Request;
@@ -13,6 +14,8 @@ use Exception;
 
 class ClientController extends Controller
 {
+    use ScopesByCompany;
+
     /**
      * Listar clientes
      */
@@ -20,11 +23,7 @@ class ClientController extends Controller
     {
         try {
             $query = Client::with(['company:id,ruc,razon_social']);
-
-            // Filtrar por empresa si se proporciona
-            if ($request->has('company_id')) {
-                $query->where('company_id', $request->company_id);
-            }
+            $this->scopeToUserCompany($query, $request);
 
             // Filtrar por tipo de documento
             if ($request->has('tipo_documento')) {

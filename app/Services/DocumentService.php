@@ -1482,10 +1482,11 @@ class DocumentService
                 'cpe' => 'https://gre-test.nubefact.com/v1',
             ]);
             
-            // Configurar certificado
-            $certificadoContent = file_get_contents(storage_path('app/public/certificado/certificado.pem'));
-            if ($certificadoContent === false) {
-                throw new Exception("No se pudo cargar el certificado");
+            // Certificado propio de la empresa (multiempresa real).
+            $company = $guide->company;
+            $certificadoContent = $company->certificadoContenido();
+            if (empty($certificadoContent)) {
+                throw new Exception("La empresa {$company->razon_social} no tiene un certificado digital configurado");
             }
             
             // Obtener credenciales GRE de la configuración de la empresa
@@ -1617,10 +1618,11 @@ class DocumentService
                 'cpe' => 'https://gre-test.nubefact.com/v1',
             ]);
             
-            // Configurar certificado
-            $certificadoContent = file_get_contents(storage_path('app/public/certificado/certificado.pem'));
-            if ($certificadoContent === false) {
-                throw new Exception("No se pudo cargar el certificado");
+            // Certificado propio de la empresa (multiempresa real).
+            $company = $guide->company;
+            $certificadoContent = $company->certificadoContenido();
+            if (empty($certificadoContent)) {
+                throw new Exception("La empresa {$company->razon_social} no tiene un certificado digital configurado");
             }
             
             $api->setBuilderOptions([

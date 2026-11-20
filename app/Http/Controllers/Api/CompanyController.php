@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\ScopesByCompany;
 use App\Http\Requests\Company\StoreCompanyRequest;
 use App\Http\Requests\Company\UpdateCompanyRequest;
 use App\Models\Company;
@@ -10,22 +11,29 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
 use Exception;
 
 class CompanyController extends Controller
 {
+    use ScopesByCompany;
+
     /**
      * Listar todas las empresas
      */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
         try {
-            $companies = Company::active()
+            $companies = $this->scopeToUserCompany(Company::active(), $request, 'id')
                 ->with(['branches'])
                 ->select([
                     'id', 'ruc', 'razon_social', 'nombre_comercial', 
                     'direccion', 'distrito', 'provincia', 'departamento',
                     'email', 'telefono', 'modo_produccion', 'activo',
+                    // Endpoints y usuario SOL se exponen para que el panel del
+                    // buzón precargue la fuente; `clave_sol` y `buzon_token`
+                    // quedan fuera a propósito (el modelo también los oculta).
+                    'buzon_sunat_endpoint', 'buzon_sunafil_endpoint', 'usuario_sol',
                     'created_at', 'updated_at'
                 ])
                 ->get();
@@ -72,6 +80,10 @@ class CompanyController extends Controller
      */
     public function show(Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany(request()->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $company->load([
                 'branches',
@@ -103,6 +115,10 @@ class CompanyController extends Controller
      */
     public function update(UpdateCompanyRequest $request, Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany($request->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $validatedData = $this->processRequestData($request);
             $company->update($validatedData);
@@ -134,6 +150,10 @@ class CompanyController extends Controller
      */
     public function destroy(Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany(request()->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             if ($this->hasAssociatedDocuments($company)) {
                 return response()->json([
@@ -169,6 +189,10 @@ class CompanyController extends Controller
      */
     public function activate(Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany(request()->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $company->update(['activo' => true]);
 
@@ -198,6 +222,10 @@ class CompanyController extends Controller
      */
     public function toggleProductionMode(Request $request, Company $company): JsonResponse
     {
+        if (! $this->userCanAccessCompany($request->user(), $company->id)) {
+            return $this->forbiddenCompany();
+        }
+
         try {
             $validator = Validator::make($request->all(), [
                 'modo_produccion' => 'required|boolean'
@@ -250,20 +278,30 @@ class CompanyController extends Controller
     {
         $validatedData = $request->validated();
 
-        // Procesar booleanos
-        $validatedData['modo_produccion'] = $this->processBoolean($validatedData['modo_produccion'] ?? false);
-        $validatedData['activo'] = $this->processBoolean($validatedData['activo'] ?? true);
+        // Actualización parcial: solo se tocan los booleanos que vienen en la
+        // petición, para no desactivar el modo producción (o reactivar la
+        // empresa) al actualizar únicamente el certificado.
+        if ($request->has('modo_produccion')) {
+            $validatedData['modo_produccion'] = $this->processBoolean($validatedData['modo_produccion']);
+        }
+        if ($request->has('activo')) {
+            $validatedData['activo'] = $this->processBoolean($validatedData['activo']);
+        }
 
         // Beneficio de Amazonía (Ley 27037): solo aplica el tipo de leyenda si la
         // empresa está marcada como contribuyente de la Amazonía.
-        $validatedData['contribuyente_amazonia'] = $this->processBoolean($validatedData['contribuyente_amazonia'] ?? false);
-        if (!$validatedData['contribuyente_amazonia']) {
-            $validatedData['tipo_amazonia'] = null;
+        if ($request->has('contribuyente_amazonia')) {
+            $validatedData['contribuyente_amazonia'] = $this->processBoolean($validatedData['contribuyente_amazonia']);
+            if (!$validatedData['contribuyente_amazonia']) {
+                $validatedData['tipo_amazonia'] = null;
+            }
         }
 
         // Procesar archivos
         if ($request->hasFile('certificado_pem')) {
-            $validatedData['certificado_pem'] = $this->storeFile($request->file('certificado_pem'), 'certificado', 'certificado.pem');
+            // Se guarda el CONTENIDO PEM en la columna, no una ruta fija: cada
+            // empresa debe conservar su propio certificado (multiempresa real).
+            $validatedData['certificado_pem'] = $this->readCertificateContent($request->file('certificado_pem'));
         }
 
         if ($request->hasFile('logo_path')) {
@@ -288,6 +326,23 @@ class CompanyController extends Controller
     private function storeFile($file, string $directory, string $fileName): string
     {
         return $file->storeAs($directory, $fileName, 'public');
+    }
+
+    /**
+     * Lee el contenido PEM del certificado subido. Se persiste el texto en la
+     * columna `certificado_pem` para que cada empresa conserve el suyo.
+     */
+    private function readCertificateContent($file): string
+    {
+        $contenido = file_get_contents($file->getRealPath());
+
+        if ($contenido === false || ! str_contains($contenido, 'BEGIN CERTIFICATE')) {
+            throw ValidationException::withMessages([
+                'certificado_pem' => 'El archivo no parece un certificado PEM válido (falta -----BEGIN CERTIFICATE-----).',
+            ]);
+        }
+
+        return $contenido;
     }
 
     /**

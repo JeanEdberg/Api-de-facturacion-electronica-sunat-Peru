@@ -342,11 +342,11 @@ class SetupController extends Controller
             ? filter_var($activo, FILTER_VALIDATE_BOOLEAN) 
             : true;
         
-        // Procesar certificado PEM si se subió un archivo
+        // Procesar certificado PEM si se subió un archivo. Se guarda el
+        // CONTENIDO en la columna para no compartir un archivo entre empresas.
         if ($request->hasFile('certificado_pem')) {
             $certificateFile = $request->file('certificado_pem');
-            $path = $certificateFile->storeAs('certificado', 'certificado.pem', 'public');
-            $companyData['certificado_pem'] = $path;
+            $companyData['certificado_pem'] = file_get_contents($certificateFile->getRealPath());
             $companyData['certificado_password'] = $request->certificado_password;
         }
         

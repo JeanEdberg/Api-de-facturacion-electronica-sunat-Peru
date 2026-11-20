@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
 use App\Http\Controllers\Api\CompraController;
+use App\Http\Controllers\Api\OnboardingController;
 use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
@@ -17,6 +18,7 @@ use App\Http\Controllers\Api\ConsultaCpeController;
 use App\Http\Controllers\Api\SetupController;
 use App\Http\Controllers\Api\SireController;
 use App\Http\Controllers\Api\SscoController;
+use App\Http\Controllers\Api\ConsultaDocumentoController;
 use App\Http\Controllers\Api\UbigeoController;
 use App\Http\Controllers\Api\CreditNoteController;
 use App\Http\Controllers\Api\DebitNoteController;
@@ -42,6 +44,15 @@ Route::post('/auth/initialize', [AuthController::class, 'initialize']);
 
 // Autenticación
 Route::post('/auth/login', [AuthController::class, 'login']);
+
+// Onboarding self-service: una empresa se registra sola (crea empresa, sucursal
+// principal y usuario administrador, con sus credenciales SOL y certificado).
+Route::post('/auth/register', [OnboardingController::class, 'register']);
+
+// Consulta de RUC/DNI (padrón) para autocompletar formularios. Pública porque
+// el alta de empresa ocurre antes de iniciar sesión; se limita por IP.
+Route::get('/v1/consulta-documento', [ConsultaDocumentoController::class, 'show'])
+    ->middleware('throttle:30,1');
 
 // ========================
 // RUTAS PROTEGIDAS (CON AUTENTICACIÓN)
@@ -194,6 +205,8 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [NotificacionController::class, 'index']);
         Route::post('/', [NotificacionController::class, 'store']);
         Route::post('/sincronizar', [NotificacionController::class, 'sincronizar']);
+        Route::post('/fuente', [NotificacionController::class, 'fuente']);
+        Route::post('/probar-fuente', [NotificacionController::class, 'probarFuente']);
         Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
         Route::post('/{notificacion}/adjuntos', [NotificacionController::class, 'adjuntar']);
         Route::get('/{notificacion}/adjunto', [NotificacionController::class, 'descargarAdjunto']);

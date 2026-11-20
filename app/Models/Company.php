@@ -25,6 +25,9 @@ class Company extends Model
         'web',
         'usuario_sol',
         'clave_sol',
+        'buzon_sunat_endpoint',
+        'buzon_sunafil_endpoint',
+        'buzon_token',
         'certificado_pem',
         'certificado_password',
         'gre_client_id_beta',
@@ -44,6 +47,8 @@ class Company extends Model
     ];
 
     protected $casts = [
+        'clave_sol' => 'encrypted',
+        'buzon_token' => 'encrypted',
         'modo_produccion' => 'boolean',
         'contribuyente_amazonia' => 'boolean',
         'activo' => 'boolean',
@@ -51,6 +56,7 @@ class Company extends Model
 
     protected $hidden = [
         'clave_sol',
+        'buzon_token',
         'certificado_pem',
         'certificado_password',
         'gre_client_secret_beta',
@@ -126,6 +132,37 @@ class Company extends Model
     public function getEndpointAttribute(): string
     {
         return $this->modo_produccion ? $this->endpoint_produccion : $this->endpoint_beta;
+    }
+
+    /**
+     * Contenido PEM del certificado digital de esta empresa.
+     *
+     * Cada RUC firma con su propio certificado, por eso se resuelve desde la
+     * empresa (columna `certificado_pem`) y no desde una ruta fija compartida.
+     * Acepta tanto el contenido PEM como, por compatibilidad, una ruta relativa
+     * al disco `public` guardada por versiones anteriores.
+     */
+    public function certificadoContenido(): ?string
+    {
+        $valor = $this->certificado_pem;
+
+        if (empty($valor)) {
+            return null;
+        }
+
+        if (str_contains($valor, 'BEGIN CERTIFICATE')) {
+            return $valor;
+        }
+
+        $path = storage_path('app/public/' . ltrim($valor, '/'));
+        $contenido = is_file($path) ? file_get_contents($path) : false;
+
+        return $contenido === false ? null : $contenido;
+    }
+
+    public function hasCertificado(): bool
+    {
+        return ! empty($this->certificadoContenido());
     }
 
     public function scopeActive($query)

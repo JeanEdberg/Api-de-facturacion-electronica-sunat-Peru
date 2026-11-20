@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\ScopesByCompany;
 use App\Http\Controllers\Traits\HandlesPdfGeneration;
 use App\Http\Requests\Boleta\CreateDailySummaryRequest;
 use App\Http\Requests\Boleta\GetBoletasPendingRequest;
@@ -19,6 +20,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class BoletaController extends Controller
 {
+    use ScopesByCompany;
+
     use HandlesPdfGeneration;
 
     protected DocumentService $documentService;
@@ -37,6 +40,7 @@ class BoletaController extends Controller
     {
         try {
             $query = Boleta::with(['company', 'branch', 'client']);
+            $this->scopeToUserCompany($query, $request);
             $this->applyFilters($query, $request);
             
             $perPage = $request->get('per_page', 15);
@@ -93,7 +97,7 @@ class BoletaController extends Controller
     /**
      * Enviar boleta a SUNAT
      */
-    public function sendToSunat(string $id): JsonResponse
+    public function sendToSunat(Request $request, string $id): JsonResponse
     {
         try {
             $boleta = Boleta::with(['company', 'branch', 'client'])->findOrFail($id);
@@ -103,6 +107,17 @@ class BoletaController extends Controller
                     'success' => false,
                     'message' => 'La boleta ya fue aceptada por SUNAT'
                 ], 400);
+            }
+
+            // Modo asíncrono: encola el envío con reintentos.
+            if ($request->boolean('async')) {
+                \App\Jobs\SendDocumentToSunatJob::dispatch('boleta', $boleta->id);
+
+                return response()->json([
+                    'success' => true,
+                    'data' => $boleta,
+                    'message' => 'Envío encolado: se procesará con reintentos automáticos',
+                ], 202);
             }
 
             $result = $this->documentService->sendToSunat($boleta, 'boleta');
@@ -306,7 +321,6 @@ class BoletaController extends Controller
     private function applyFilters($query, Request $request): void
     {
         $filters = [
-            'company_id' => 'where',
             'branch_id' => 'where',
             'estado_sunat' => 'where',
             'fecha_desde' => 'whereDate|>=',

@@ -56,22 +56,19 @@ class GreenterService
         
         $see->setService($endpoint);
         
-        // Configurar certificado cargando desde archivo
+        // Configurar certificado desde la empresa (multiempresa real: cada RUC
+        // firma con su propio certificado, no con uno compartido).
         try {
-            $certificadoPath = storage_path('app/public/certificado/certificado.pem');
-            
-            if (!file_exists($certificadoPath)) {
-                throw new Exception("Archivo de certificado no encontrado: " . $certificadoPath);
+            $certificadoContent = $this->company->certificadoContenido();
+
+            if (empty($certificadoContent)) {
+                throw new Exception(
+                    "La empresa {$this->company->razon_social} no tiene un certificado digital configurado"
+                );
             }
-            
-            $certificadoContent = file_get_contents($certificadoPath);
-            
-            if ($certificadoContent === false) {
-                throw new Exception("No se pudo leer el archivo de certificado");
-            }
-            
+
             $see->setCertificate($certificadoContent);
-            Log::info("Certificado cargado desde archivo: " . $certificadoPath);
+            Log::info("Certificado de la empresa {$this->company->ruc} cargado correctamente");
         } catch (Exception $e) {
             Log::error("Error al configurar certificado: " . $e->getMessage());
             throw new Exception("Error al configurar certificado: " . $e->getMessage());
@@ -108,22 +105,18 @@ class GreenterService
             'cpe' => $endpoint,
         ]);
         
-        // Configurar certificado
+        // Configurar certificado desde la empresa (cada RUC usa el suyo).
         try {
-            $certificadoPath = storage_path('app/public/certificado/certificado.pem');
-            
-            if (!file_exists($certificadoPath)) {
-                throw new Exception("Archivo de certificado no encontrado para GRE: " . $certificadoPath);
+            $certificadoContent = $this->company->certificadoContenido();
+
+            if (empty($certificadoContent)) {
+                throw new Exception(
+                    "La empresa {$this->company->razon_social} no tiene un certificado digital configurado para GRE"
+                );
             }
-            
-            $certificadoContent = file_get_contents($certificadoPath);
-            
-            if ($certificadoContent === false) {
-                throw new Exception("No se pudo leer el archivo de certificado para GRE");
-            }
-            
+
             $api->setCertificate($certificadoContent);
-            Log::info("Certificado GRE cargado desde archivo: " . $certificadoPath);
+            Log::info("Certificado GRE de la empresa {$this->company->ruc} cargado correctamente");
         } catch (Exception $e) {
             Log::error("Error al configurar certificado para GRE: " . $e->getMessage());
             throw new Exception("Error al configurar certificado para GRE: " . $e->getMessage());

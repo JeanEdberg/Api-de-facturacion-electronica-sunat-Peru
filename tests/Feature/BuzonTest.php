@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 
@@ -231,4 +232,254 @@ test('sin certificado no hay alerta de vencimiento', function () {
         ->getJson("/api/v1/notificaciones?company_id={$this->company->id}")
         ->assertStatus(200)
         ->assertJsonPath('alertas.certificado.tiene', false);
+});
+
+test('guarda la fuente del buzón por empresa y no expone los secretos', function () {
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/fuente', [
+            'company_id' => $this->company->id,
+            'buzon_sunat_endpoint' => 'https://puente.test/buzon',
+            'buzon_sunafil_endpoint' => 'https://puente.test/buzon-sunafil',
+            'buzon_token' => 'token-del-puente',
+            'usuario_sol' => 'MODDATOS',
+            'clave_sol' => 'clave-real-sol',
+        ])
+        ->assertStatus(200)
+        ->assertJsonPath('data.configurado', true)
+        ->assertJsonPath('data.sunat', true)
+        ->assertJsonPath('data.token', true)
+        ->assertJsonPath('data.sol', true)
+        ->assertJsonMissingPath('data.clave_sol')
+        ->assertJsonMissingPath('data.buzon_token');
+
+    $company = $this->company->fresh();
+    expect($company->buzon_sunat_endpoint)->toBe('https://puente.test/buzon');
+    expect($company->usuario_sol)->toBe('MODDATOS');
+    expect($company->clave_sol)->toBe('clave-real-sol');
+    expect($company->buzon_token)->toBe('token-del-puente');
+
+    // El token queda cifrado en la base, no en claro.
+    $crudo = DB::table('companies')->where('id', $company->id)->value('buzon_token');
+    expect($crudo)->not->toBe('token-del-puente');
+});
+
+test('guardar la fuente con secretos vacíos conserva la Clave SOL actual', function () {
+    $this->company->update(['clave_sol' => 'clave-original', 'buzon_token' => 'token-original']);
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/fuente', [
+            'company_id' => $this->company->id,
+            'buzon_sunat_endpoint' => 'https://puente.test/buzon',
+            'buzon_token' => '',
+            'clave_sol' => '',
+        ])
+        ->assertStatus(200);
+
+    $company = $this->company->fresh();
+    expect($company->buzon_sunat_endpoint)->toBe('https://puente.test/buzon');
+    expect($company->clave_sol)->toBe('clave-original');
+    expect($company->buzon_token)->toBe('token-original');
+});
+
+test('el listado de empresas expone los endpoints y el usuario SOL sin secretos', function () {
+    $this->company->update([
+        'buzon_sunat_endpoint' => 'https://puente.test/buzon',
+        'buzon_token' => 'token-secreto',
+        'clave_sol' => 'clave-secreta',
+        'usuario_sol' => 'MODDATOS',
+    ]);
+
+    $respuesta = $this->actingAs($this->user)
+        ->getJson('/api/v1/companies')
+        ->assertStatus(200);
+
+    $empresa = collect($respuesta->json('data'))->firstWhere('id', $this->company->id);
+
+    expect($empresa['buzon_sunat_endpoint'])->toBe('https://puente.test/buzon');
+    expect($empresa['usuario_sol'])->toBe('MODDATOS');
+    expect($empresa)->not->toHaveKey('clave_sol');
+    expect($empresa)->not->toHaveKey('buzon_token');
+});
+
+test('el listado del buzón informa el estado de la fuente', function () {
+    $this->company->update([
+        'buzon_sunat_endpoint' => 'https://puente.test/buzon',
+        'clave_sol' => 'clave-real',
+    ]);
+
+    $this->actingAs($this->user)
+        ->getJson("/api/v1/notificaciones?company_id={$this->company->id}")
+        ->assertStatus(200)
+        ->assertJsonPath('fuente.configurado', true)
+        ->assertJsonPath('fuente.sunat', true)
+        ->assertJsonPath('fuente.sunafil', false)
+        ->assertJsonPath('fuente.sol', true)
+        ->assertJsonPath('fuente.origenes', ['empresa']);
+});
+
+test('probar la fuente informa la conexión correcta sin importar notificaciones', function () {
+    $this->company->update(['buzon_sunat_endpoint' => 'https://puente.test/buzon']);
+
+    Http::fake([
+        'puente.test/*' => Http::response([
+            'data' => [
+                ['codigo' => 'N-1', 'asunto' => 'Esquela'],
+                ['codigo' => 'N-2', 'asunto' => 'Orden de fiscalización'],
+            ],
+        ]),
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/probar-fuente', [
+            'company_id' => $this->company->id,
+            'entidad' => 'SUNAT',
+        ])
+        ->assertStatus(200)
+        ->assertJsonPath('conectado', true)
+        ->assertJsonPath('total', 2);
+
+    // Probar no debe registrar nada.
+    expect(Notificacion::count())->toBe(0);
+
+    Http::assertSent(fn ($peticion) => $peticion['ruc'] === $this->company->ruc
+        && $peticion['clave'] === $this->company->clave_sol);
+});
+
+test('probar la fuente muestra el motivo del puente y no el HTML de SUNAT', function () {
+    $this->company->update(['buzon_sunat_endpoint' => 'https://puente.test/buzon']);
+
+    Http::fake([
+        'puente.test/*' => Http::response([
+            'error' => 'SUNAT rechazó las credenciales SOL del RUC 20614684772.',
+            'detalle' => '<html><body>Error de autenticación</body></html>',
+        ], 502),
+    ]);
+
+    $respuesta = $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/probar-fuente', ['company_id' => $this->company->id])
+        ->assertStatus(502)
+        ->assertJsonPath('conectado', false);
+
+    $mensaje = $respuesta->json('message');
+    expect($mensaje)->toContain('rechazó las credenciales SOL');
+    expect($mensaje)->not->toContain('<html>');
+});
+
+test('probar la fuente sin endpoint avisa que falta configurarla', function () {
+    config()->set('services.buzon.sunat_endpoint', null);
+    Http::fake();
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/probar-fuente', ['company_id' => $this->company->id])
+        ->assertStatus(502)
+        ->assertJsonPath('conectado', false)
+        ->assertJsonPath('total', 0);
+
+    Http::assertNothingSent();
+});
+
+test('la fuente de la empresa gana sobre la del entorno', function () {
+    config()->set('services.buzon.sunat_endpoint', 'https://entorno.test/buzon');
+    $this->company->update(['buzon_sunat_endpoint' => 'https://empresa.test/buzon']);
+
+    Http::fake(['*' => Http::response(['data' => []])]);
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/sincronizar', ['company_id' => $this->company->id])
+        ->assertStatus(200);
+
+    Http::assertSent(fn ($peticion) => str_contains($peticion->url(), 'empresa.test'));
+    Http::assertNotSent(fn ($peticion) => str_contains($peticion->url(), 'entorno.test'));
+});
+
+test('sin fuente propia ni de entorno la empresa usa la del entorno y lo refleja', function () {
+    config()->set('services.buzon.sunat_endpoint', 'https://entorno.test/buzon');
+
+    $this->actingAs($this->user)
+        ->getJson("/api/v1/notificaciones?company_id={$this->company->id}")
+        ->assertStatus(200)
+        ->assertJsonPath('fuente.configurado', true)
+        ->assertJsonPath('fuente.origenes', ['entorno']);
+});
+
+test('no se puede configurar la fuente del buzón de una empresa ajena', function () {
+    $otra = Company::factory()->create();
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/fuente', [
+            'company_id' => $otra->id,
+            'buzon_sunat_endpoint' => 'https://ajena.test/buzon',
+            'clave_sol' => 'clave',
+        ])
+        ->assertStatus(403);
+
+    expect($otra->fresh()->buzon_sunat_endpoint)->toBeNull();
+});
+
+test('no se puede probar la fuente de una empresa ajena', function () {
+    $otra = Company::factory()->create();
+    Http::fake();
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/probar-fuente', ['company_id' => $otra->id])
+        ->assertStatus(403);
+
+    Http::assertNothingSent();
+});
+
+test('probar la fuente con el puente caído no filtra detalles de cURL', function () {
+    $this->company->update(['buzon_sunat_endpoint' => 'http://127.0.0.1:9/buzon']);
+
+    $respuesta = $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/probar-fuente', ['company_id' => $this->company->id])
+        ->assertStatus(502)
+        ->assertJsonPath('conectado', false);
+
+    $mensaje = $respuesta->json('message');
+    expect($mensaje)->not->toContain('cURL error');
+    expect($mensaje)->not->toContain('libcurl');
+    expect($mensaje)->toContain('puente');
+});
+
+test('la clave SOL se guarda cifrada y el modelo la devuelve en claro', function () {
+    $this->company->clave_sol = 'clave-real-123';
+    $this->company->save();
+
+    $crudo = DB::table('companies')->where('id', $this->company->id)->value('clave_sol');
+
+    expect($crudo)->not->toBe('clave-real-123');
+    expect($crudo)->toStartWith('eyJ'); // payload del cifrador de Laravel
+    expect($this->company->fresh()->clave_sol)->toBe('clave-real-123');
+});
+
+test('la clave SOL no aparece al serializar la empresa', function () {
+    $this->company->clave_sol = 'clave-real-123';
+    $this->company->save();
+
+    expect($this->company->fresh()->toArray())->not->toHaveKey('clave_sol');
+});
+
+test('el comando sunat:clave-sol guarda la clave de la empresa', function () {
+    $this->artisan('sunat:clave-sol', ['ruc' => $this->company->ruc, '--usuario' => 'MODDATOS'])
+        ->expectsQuestion('Clave SOL (no se muestra al escribir)', 'clave-desde-comando')
+        ->assertSuccessful();
+
+    $empresa = $this->company->fresh();
+    expect($empresa->clave_sol)->toBe('clave-desde-comando');
+    expect($empresa->usuario_sol)->toBe('MODDATOS');
+});
+
+test('el comando sunat:clave-sol falla con un RUC desconocido', function () {
+    $this->artisan('sunat:clave-sol', ['ruc' => '20999999999'])
+        ->assertFailed();
+});
+
+test('el comando sunat:clave-sol no guarda una clave vacía', function () {
+    $original = $this->company->clave_sol;
+
+    $this->artisan('sunat:clave-sol', ['ruc' => $this->company->ruc, '--usuario' => 'MODDATOS'])
+        ->expectsQuestion('Clave SOL (no se muestra al escribir)', '')
+        ->assertFailed();
+
+    expect($this->company->fresh()->clave_sol)->toBe($original);
 });
