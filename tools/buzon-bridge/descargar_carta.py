@@ -72,6 +72,10 @@ def main():
             fallos += 1
             continue
 
+        # Si no es un PDF se guarda con otro nombre: sobrescribir el archivo
+        # bueno con la respuesta del visor deja sin muestra para diagnosticar.
+        if not contenido.startswith(b"%PDF"):
+            nombre = f"respuesta-{cual}.html"
         ruta = os.path.join(os.getcwd(), nombre)
         with open(ruta, "wb") as f:
             f.write(contenido)

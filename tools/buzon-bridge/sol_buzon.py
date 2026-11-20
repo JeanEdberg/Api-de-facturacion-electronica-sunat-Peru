@@ -1546,6 +1546,28 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
             nombre = _nombre_de_cabecera(cab2.get("Content-Disposition", ""))
             return nombre or f"{tipo}.pdf", contenido2
 
+    # La carta abre un diálogo (`formDescargaDoc`) y dentro está el botón
+    # «Descargar» que hace la descarga real. Es un segundo POST.
+    boton_dialogo = _boton_descarga_en_dialogo(contenido)
+    if boton_dialogo:
+        datos2 = _campos_ocultos(
+            contenido.decode("utf-8", "ignore"), boton_dialogo["formulario"]
+        )
+        datos2[boton_dialogo["boton"]] = boton_dialogo["boton"]
+        datos2.update(
+            {
+                "javax.faces.source": boton_dialogo["boton"],
+                "javax.faces.partial.execute": boton_dialogo["boton"],
+                "javax.faces.partial.render": "@all",
+            }
+        )
+        _, cab3, contenido3 = sesion.post_ajax_crudo(url_bandeja, datos2)
+        if _es_pdf(contenido3):
+            nombre = _nombre_de_cabecera(cab3.get("Content-Disposition", ""))
+            return nombre or f"{tipo}.pdf", contenido3
+        # Se conserva la respuesta del diálogo: es la que dice qué falta.
+        contenido, cabeceras = contenido3, cab3
+
     # Se guarda la respuesta cruda: es lo único que dice qué contestó SUNAFIL
     # cuando no fue el archivo, y sin ella sólo se puede adivinar.
     carpeta = os.environ.get("BUZON_GUARDAR")
@@ -1574,6 +1596,38 @@ def _es_pdf(contenido):
 # Marcas de la vista del documento. Si la respuesta las trae, la descarga es
 # otra petición y hay que sacar su dirección de aquí.
 MARCAS_VISOR = ("visor", "embed", "iframe", "pdfjs", "reportviewer", "jasper")
+
+
+def _boton_descarga_en_dialogo(contenido):
+    """Botón «Descargar» del diálogo que abre la carta.
+
+    Al pulsar el icono de PDF, SUNAFIL no devuelve el archivo: devuelve un
+    diálogo (`formDescargaDoc`) con un aviso y un botón «Descargar» que sí
+    descarga. Se busca ese botón por el formulario y por su texto, y se
+    descarta el que no se puede pulsar.
+    """
+    texto = contenido.decode("utf-8", "ignore") if isinstance(contenido, bytes) else contenido
+
+    for formulario in re.findall(r"""<form[^>]*\bid\s*=\s*["']([^"']*DescargaDoc[^"']*)["']""", texto, re.I):
+        bloque = None
+        for trozo in re.split(r"(?=<form\b)", texto)[1:]:
+            ident = re.search(r"""<form[^>]*\bid\s*=\s*["']([^"']+)["']""", trozo)
+            if ident and ident.group(1) == formulario:
+                bloque = trozo.split("</form>")[0]
+                break
+        if not bloque:
+            continue
+
+        for boton in re.findall(r"<button\b.*?</button>", bloque, re.S | re.I):
+            apertura = boton.split(">", 1)[0]
+            nombre = re.search(r"""\bname\s*=\s*["']([^"']+)["']""", apertura)
+            if not nombre or re.search(r"\bdisabled\b", apertura, re.I):
+                continue
+            etiqueta = _sin_acentos(_texto_celda(boton))
+            if "descargar" not in etiqueta and "fa-file-pdf" not in boton:
+                continue
+            return {"formulario": formulario, "boton": unescape(nombre.group(1))}
+    return None
 
 
 def _url_de_documento(contenido, cabeceras):

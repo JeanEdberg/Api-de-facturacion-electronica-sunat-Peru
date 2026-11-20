@@ -678,6 +678,47 @@ class DescargarDocumentoTest(unittest.TestCase):
         self.assertEqual(self.sesion.post_crudo.call_args[0][0], "http://casilla/vista")
 
 
+DIALOGO_DESCARGA = (
+    "<?xml version='1.0' encoding='UTF-8'?>"
+    "<partial-response><changes>"
+    '<update id="formDescargaDoc:panelDescargaDoccontent"><![CDATA['
+    '<div class="modal-content"><h4>Descargar Documento</h4>'
+    '<div class="modal-body"><span>Estimado empleador, para poder leer el '
+    "documento, favor de descargar el documento.</span></div>"
+    '<form id="formDescargaDoc" method="post" action="/si.inbox/ActosAdministrativos/ListadoRequerimientos">'
+    '<input type="hidden" name="javax.faces.ViewState" value="VS:DLG" />'
+    '<button type="submit" id="formDescargaDoc:j_idt179" '
+    'name="formDescargaDoc:j_idt179" class="btn btn-primary" '
+    'onclick="PrimeFaces.monitorDownload(start, stop);">'
+    '<span><i class="fa fa-file-pdf-o"></i></span> Descargar</button>'
+    '<button type="button" class="btn btn-default" data-dismiss="modal">Cerrar</button>'
+    "</form></div>]]></update></changes></partial-response>"
+)
+
+
+class DialogoDescargaTest(unittest.TestCase):
+    """La carta abre un diálogo con un segundo botón: ahí está el PDF."""
+
+    def test_encuentra_el_boton_descargar_del_dialogo(self):
+        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA.encode())
+
+        self.assertEqual(boton["formulario"], "formDescargaDoc")
+        self.assertEqual(boton["boton"], "formDescargaDoc:j_idt179")
+
+    def test_no_confunde_el_boton_cerrar_con_el_de_descargar(self):
+        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
+        self.assertNotIn("Cerrar", boton["boton"])
+
+    def test_un_boton_deshabilitado_no_sirve(self):
+        roto = DIALOGO_DESCARGA.replace(
+            'class="btn btn-primary"', 'class="btn btn-primary" disabled="disabled"'
+        )
+        self.assertIsNone(puente._boton_descarga_en_dialogo(roto))
+
+    def test_una_pagina_sin_dialogo_devuelve_none(self):
+        self.assertIsNone(puente._boton_descarga_en_dialogo("<html><body>x</body></html>"))
+
+
 class DiasHabilesTest(unittest.TestCase):
     def test_cuenta_habiles_y_no_naturales(self):
         """Del viernes 20 al jueves 26 hay 6 naturales pero solo 4 hábiles."""
