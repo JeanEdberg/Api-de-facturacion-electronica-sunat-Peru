@@ -167,6 +167,21 @@ class NotificacionesTest(unittest.TestCase):
         self.assertEqual(filas[0]["columna_1"], "uno")
         self.assertEqual(filas[0]["columna_2"], "dos")
 
+    def test_encuentra_la_tabla_si_el_id_esta_en_el_div_que_la_envuelve(self):
+        """PrimeFaces pone el id en el <div> y deja la <table> sin id."""
+        html = """
+        <div id="formNotificacion:dtNotificaciones" class="ui-datatable">
+          <div class="ui-datatable-header">Notificaciones</div>
+          <table role="grid"><thead><tr><th>N&uacute;mero</th></tr></thead>
+          <tbody><tr><td>0000122241</td></tr></tbody></table>
+        </div>
+        """
+
+        filas = puente.extraer_notificaciones(html)
+
+        self.assertEqual(len(filas), 1)
+        self.assertEqual(filas[0]["numero"], "0000122241")
+
     def test_distingue_el_inicio_de_una_bandeja_abierta(self):
         self.assertTrue(puente._es_inicio("<div id='formInicio_parque'></div>"))
         self.assertFalse(puente._es_inicio(self.TABLA))

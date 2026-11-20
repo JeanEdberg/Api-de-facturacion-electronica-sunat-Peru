@@ -1083,11 +1083,25 @@ def extraer_acciones_previas(html_casilla):
 
 
 def _tabla_por_id(html_casilla, fragmento):
-    """Primera tabla cuyo id contiene `fragmento` (sin distinguir mayúsculas)."""
+    """Tabla cuyo id contiene `fragmento`, o la que va dentro de ese elemento.
+
+    PrimeFaces a veces pone el id en el `<div>` que envuelve la tabla y deja la
+    `<table>` sin id, así que no basta con mirar las etiquetas `<table>`.
+    """
+    buscado = fragmento.lower()
+
     for tabla in _tablas(html_casilla):
         apertura = re.match(r"<table[^>]*>", tabla, re.S)
-        if apertura and fragmento.lower() in apertura.group(0).lower():
+        if apertura and buscado in apertura.group(0).lower():
             return tabla
+
+    for m in re.finditer(r"<[a-zA-Z][^>]*\bid\s*=\s*[\"'][^\"']*\b" + re.escape(buscado), html_casilla, re.I):
+        envoltorio = _elemento_en(html_casilla, m.start())
+        dentro = re.search(r"<table\b", envoltorio)
+        if dentro:
+            tablas = _tablas(envoltorio[dentro.start():])
+            if tablas:
+                return tablas[0]
     return None
 
 

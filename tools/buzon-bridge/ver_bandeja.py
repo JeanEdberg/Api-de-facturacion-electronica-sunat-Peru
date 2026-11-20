@@ -10,6 +10,7 @@ Uso:
 """
 
 import os
+import re
 import sys
 
 import sol_buzon as puente
@@ -64,12 +65,35 @@ def main():
             print(f"   {columna}: {valor}")
 
     if not notificaciones and not acciones:
-        print(
-            "\nNo se encontró ninguna tabla reconocible.\n"
-            "Pega esta salida y el nombre del archivo; puede que SUNAFIL haya\n"
-            "cambiado los ids de las tablas."
-        )
+        _diagnostico(html)
     return 0
+
+
+def _diagnostico(html):
+    """Muestra qué tablas e ids trae el archivo, para no adivinar."""
+    print()
+    print("=" * 72)
+    print("DIAGNÓSTICO: no se reconoció ninguna tabla")
+    print("=" * 72)
+    print(f"Tamaño del archivo: {len(html)} caracteres")
+
+    tablas = puente._tablas(html)
+    print(f"\nTablas encontradas: {len(tablas)}")
+    for i, tabla in enumerate(tablas[:15], 1):
+        apertura = re.match(r"<table[^>]*>", tabla, re.S)
+        etiqueta = apertura.group(0) if apertura else "(sin apertura)"
+        filas = len(re.findall(r"<tr[^>]*>", tabla))
+        print(f"  {i}) {re.sub(chr(10), ' ', etiqueta)[:160]}")
+        print(f"     filas={filas}  tamaño={len(tabla)}")
+
+    ids = re.findall(r'\bid\s*=\s*"([^"]+)"', html)
+    candidos = [i for i in ids if re.search(r"notific|accion|dt|tabla|lista", i, re.I)]
+    print(f"\nIds con pinta de lista ({len(candidos)}):")
+    for ident in sorted(set(candidos))[:20]:
+        print(f"  {ident}")
+
+    print("\nPrimeros 400 caracteres del archivo:")
+    print("  " + re.sub(r"\s+", " ", html[:400]))
 
 
 if __name__ == "__main__":
