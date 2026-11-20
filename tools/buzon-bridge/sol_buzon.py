@@ -32,9 +32,13 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-MENU = "https://menu.ebs.sunat.gob.pe/menu/"
-LOGIN = "https://menu.ebs.sunat.gob.pe/menu/j_security_check"
-BUZON = "https://menu.ebs.sunat.gob.pe/menu/buzon"
+# Menú SOL real. Ojo: `menu.ebs.sunat.gob.pe` (el host que usaba la versión
+# anterior) no existe en DNS; el dominio válido es `e-menu.sunat.gob.pe`.
+# Las rutas de login y buzón no están documentadas por SUNAT y hay que
+# confirmarlas contra el HTML actual antes de dar esto por bueno.
+MENU = "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm"
+LOGIN = "https://e-menu.sunat.gob.pe/cl-ti-itmenu/j_security_check"
+BUZON = "https://e-menu.sunat.gob.pe/cl-ti-itmenu/Buzon"
 
 PUERTO = int(os.environ.get("BUZON_BRIDGE_PORT", "12002"))
 HOST = os.environ.get("BUZON_BRIDGE_HOST", "0.0.0.0")
