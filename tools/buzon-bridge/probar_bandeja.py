@@ -16,6 +16,7 @@ import getpass
 import os
 import re
 import sys
+from datetime import datetime
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,17 +27,42 @@ ETIQUETA = "Notificaciones de Fiscalización"
 RECURSO_JS = "/si.inbox/faces/javax.faces.resource/js/bsf.js?ln=bsf"
 
 
-def _resumen(nombre, html):
-    """Dice si la respuesta parece la bandeja o la misma página de inicio."""
+# Solo aparecen en la página de inicio, no en la bandeja.
+MARCAS_INICIO = ("formInicio_parque", "image-1.jpg", "La modificaci")
+
+
+def _resumen(nombre, html, carpeta):
+    """Dice si la respuesta es la bandeja o la misma página de inicio."""
     tablas = re.findall(r'<table[^>]*\bid="([^"]+)"', html)
     filas = len(re.findall(r"<tr[^>]*>", html))
     es_parcial = "<partial-response" in html
-    tiene_menu = "formMenu2:j_idt25:1:j_idt29:0:j_idt31" in html
+    marcas = [m for m in MARCAS_INICIO if m in html]
+    redirige = re.search(r"<redirect url=\"([^\"]+)\"", html)
+    errores = re.findall(r"<error-name>([^<]*)</error-name>", html)
+
     print(f"  {nombre}")
-    print(f"    {len(html):>7} B | filas={filas:<4} menu={'sí' if tiene_menu else 'no'}"
-          f" | parcial={'sí' if es_parcial else 'no'}")
+    print(f"    {len(html):>7} B | filas={filas:<4} parcial={'sí' if es_parcial else 'no'}"
+          f" | inicio={'sí' if marcas else 'no'}")
+    if redirige:
+        print(f"    REDIRIGE A: {redirige.group(1)}")
+    if errores:
+        print(f"    ERRORES JSF: {errores}")
     if tablas:
         print(f"    tablas: {tablas[:6]}")
+    pistas = [
+        i
+        for i in re.findall(r'\bid="([^"]+)"', html)
+        if re.search(r"notific|bandeja|inbox|dt|lista|tabla", i, re.I)
+    ]
+    if pistas:
+        print(f"    ids con pinta de lista: {sorted(set(pistas))[:12]}")
+    if marcas:
+        print(f"    marcas de inicio: {marcas}")
+
+    nombre_fich = re.sub(r"[^a-zA-Z0-9]+", "-", nombre)[:40].strip("-")
+    with open(os.path.join(carpeta, nombre_fich + ".html"), "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"    guardado en {nombre_fich}.html")
     return html
 
 
@@ -54,11 +80,20 @@ def _mostrar_js(sesion):
         print("Suele significar que la sesión caducó entre las pruebas.")
         return
 
-    print(f"\n{'=' * 72}\nbsf.js ({len(js)} B)\n{'=' * 72}")
-    for nombre in ("submitForm", "ab"):
-        m = re.search(rf"(?:function\s+{nombre}\s*\(|{nombre}\s*[:=]\s*function\s*\()", js)
-        if not m:
+    ruta_js = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bsf.js")
+    with open(ruta_js, "w", encoding="utf-8") as f:
+        f.write(js)
+    print(f"\n{'=' * 72}\nbsf.js ({len(js)} B) -> {ruta_js}\n{'=' * 72}")
+
+    # `submitForm` solo hace form.submit(); los campos reales los pone
+    # `addParametersToForm`, así que se muestran todas las funciones.
+    nombres = re.findall(r"\b([A-Za-z_$][\w$]*)\s*[:=]\s*function\s*\(", js)
+    vistos = set()
+    for nombre in nombres:
+        if nombre in vistos:
             continue
+        vistos.add(nombre)
+        m = re.search(rf"\b{re.escape(nombre)}\s*[:=]\s*function\s*\(", js)
         llave = js.find("{", m.start())
         profundidad, fin = 0, len(js)
         for i in range(llave, len(js)):
@@ -69,7 +104,7 @@ def _mostrar_js(sesion):
                 if profundidad == 0:
                     fin = i + 1
                     break
-        print(f"\n--- {nombre} ---\n{js[m.start():fin][:1600]}")
+        print(f"\n--- {nombre} ---\n{js[m.start():fin][:1200]}")
 
 
 def main():
@@ -101,6 +136,12 @@ def main():
             print(f"Detalle: {e.detalle[:400]}")
         return 1
 
+    carpeta = os.path.join(
+        os.getcwd(), f"sondeo-bandeja-{datetime.now():%Y%m%d-%H%M%S}"
+    )
+    os.makedirs(carpeta, exist_ok=True)
+    print(f"\nGuardando las respuestas en {carpeta}/")
+
     destino = puente.URL_CASILLA_SUNAFIL + RUTA_INICIO
 
     def preparar():
@@ -116,7 +157,7 @@ def main():
             destino, {"formMenu2": "formMenu2", boton: boton,
                       "javax.faces.ViewState": vista}
         )
-        _resumen("1) POST de formulario normal", html)
+        _resumen("1) POST de formulario normal", html, carpeta)
     except puente.SolError as e:
         print(f"1) falló: {e.mensaje}")
 
@@ -134,7 +175,7 @@ def main():
                 "javax.faces.ViewState": vista,
             },
         )
-        _resumen("2) POST parcial (source/execute/render)", html)
+        _resumen("2) POST parcial (source/execute/render)", html, carpeta)
     except puente.SolError as e:
         print(f"2) falló: {e.mensaje}")
 
@@ -146,7 +187,7 @@ def main():
             {"formMenu2": "formMenu2", boton: boton,
              "javax.faces.ViewState": vista},
         )
-        _resumen("3) POST parcial mínimo", html)
+        _resumen("3) POST parcial mínimo", html, carpeta)
     except puente.SolError as e:
         print(f"3) falló: {e.mensaje}")
 
