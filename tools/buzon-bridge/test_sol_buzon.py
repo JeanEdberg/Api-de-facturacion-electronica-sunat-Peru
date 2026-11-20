@@ -182,6 +182,19 @@ class NotificacionesTest(unittest.TestCase):
         self.assertEqual(len(filas), 1)
         self.assertEqual(filas[0]["numero"], "0000122241")
 
+    def test_una_tabla_vacia_se_reconoce_y_no_se_confunde_con_un_fallo(self):
+        """Bandeja vacía y bandeja ilegible no son lo mismo."""
+        html = """
+        <table id="formNotificacion:dtNotificaciones">
+        <thead><tr><th>N&uacute;mero</th></tr></thead><tbody></tbody></table>
+        """
+
+        self.assertIsNotNone(puente._tabla_por_id(html, "dtNotificaciones"))
+        self.assertEqual(puente.extraer_notificaciones(html), [])
+
+    def test_sin_la_tabla_no_se_reconoce_nada(self):
+        self.assertIsNone(puente._tabla_por_id("<html></html>", "dtNotificaciones"))
+
     def test_distingue_el_inicio_de_una_bandeja_abierta(self):
         self.assertTrue(puente._es_inicio("<div id='formInicio_parque'></div>"))
         self.assertFalse(puente._es_inicio(self.TABLA))
@@ -214,6 +227,37 @@ class LeerBuzonSunafilTest(unittest.TestCase):
                 puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
 
         self.assertIn("página de inicio", ctx.exception.mensaje)
+
+    def test_una_bandeja_vacia_devuelve_lista_vacia_sin_error(self):
+        """Sin notificaciones es un resultado válido, no un fallo."""
+        html = """
+        <table id="formNotificacion:dtNotificaciones">
+        <thead><tr><th>N&uacute;mero</th></tr></thead><tbody></tbody></table>
+        """
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("code", "state")
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value=html
+        ):
+            datos = puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        self.assertEqual(datos["notificaciones"], [])
+        self.assertEqual(datos["acciones_previas"], [])
+
+    def test_si_la_bandeja_no_trae_su_tabla_lo_avisa(self):
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("code", "state")
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value="<html><body>otra cosa</body></html>"
+        ):
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        self.assertIn("no trae la tabla", ctx.exception.mensaje)
 
     def test_devuelve_las_dos_bandejas_cuando_la_bandeja_se_abre(self):
         html = """

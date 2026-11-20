@@ -1165,8 +1165,17 @@ def leer_buzon_sunafil(ruc, usuario, clave):
             detalle=f"code={code[:12]}… state={state}",
         )
 
+    notificaciones = extraer_notificaciones(html)
+    if not notificaciones and _tabla_por_id(html, "dtNotificaciones") is None:
+        raise SolError(
+            "La bandeja se abrió pero no trae la tabla de notificaciones. "
+            "Puede que SUNAFIL haya cambiado el id o que el usuario no tenga "
+            "esa bandeja habilitada.",
+            detalle=f"code={code[:12]}… state={state}",
+        )
+
     return {
-        "notificaciones": extraer_notificaciones(html),
+        "notificaciones": notificaciones,
         "acciones_previas": extraer_acciones_previas(html),
     }
 

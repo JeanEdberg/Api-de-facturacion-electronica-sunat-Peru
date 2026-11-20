@@ -38,8 +38,14 @@ def main():
     notificaciones = puente.extraer_notificaciones(html)
     acciones = puente.extraer_acciones_previas(html)
 
+    hay_tabla_notificaciones = (
+        puente._tabla_por_id(html, "dtNotificaciones") is not None
+    )
+
     print("=" * 72)
     print(f"NOTIFICACIONES: {len(notificaciones)}")
+    if hay_tabla_notificaciones and not notificaciones:
+        print("  (la tabla existe y está vacía: no hay notificaciones)")
     print("=" * 72)
     for i, fila in enumerate(notificaciones, 1):
         print(f"\n{i})")
@@ -64,7 +70,9 @@ def main():
                 continue
             print(f"   {columna}: {valor}")
 
-    if not notificaciones and not acciones:
+    # Solo se diagnostica si no se reconoció NINGUNA tabla: una bandeja vacía
+    # es un resultado válido y no un fallo del lector.
+    if not hay_tabla_notificaciones and not acciones:
         _diagnostico(html)
     return 0
 
