@@ -1148,18 +1148,15 @@ BANDEJAS_SUNAFIL = (
 def leer_buzon_sunafil(ruc, usuario, clave):
     """Lee la casilla electrónica de SUNAFIL y devuelve sus bandejas.
 
-    El login va contra el SSO y cada bandeja se abre pulsando su opción del
-    menú (un POST de JSF con el ViewState de la página de inicio). Se abre una
-    por una porque cada una es una pantalla distinta.
+    El orden importa: el `code` de OAuth2 caduca en segundos, así que se canjea
+    en cuanto el login lo devuelve. Cualquier comprobación de red entre esos dos
+    pasos lo invalida, y la casilla acaba devolviendo el login sin menú.
 
-    Si una bandeja falla, las demás se devuelven igual y el fallo se informa en
-    `errores`: una bandeja caída no debe ocultar las otras.
+    Cada bandeja se abre por separado porque son pantallas distintas. Si una
+    falla, las demás se devuelven igual y el fallo va en `errores`.
     """
-    # Una sola sesión de principio a fin: el JSESSIONID que deja el login es lo
-    # que autoriza el POST que abre la bandeja.
-    sesion = Sesion()
-    code, state = autenticar_sunafil(ruc, usuario, clave, sesion=sesion)
-
+    # La comprobación de red va ANTES del login: entre el login y el canje del
+    # `code` no puede haber nada, porque el código caduca en segundos.
     alcanzable, tls = _sondear_sunafil()
     if not alcanzable:
         raise SolError(
@@ -1169,15 +1166,17 @@ def leer_buzon_sunafil(ruc, usuario, clave):
             detalle=tls,
         )
 
-    # El login devuelve un `code` de OAuth2, pero la casilla no lo canjea sola:
-    # hay que volver a la `redirect_uri` con él, igual que hace el navegador.
-    # Sin este paso la sesión no queda autenticada y el menú no trae opciones.
+    sesion = Sesion()
+    code, state = autenticar_sunafil(ruc, usuario, clave, sesion=sesion)
+
+    # Canje inmediato, igual que el navegador: sin esto la sesión no queda
+    # autenticada aunque el login haya sido aceptado.
     entrada = (
         f"{URL_CASILLA_SUNAFIL}{RUTA_REDIRECT_SUNAFIL}"
         f"?state={urllib.parse.quote(state)}&code={urllib.parse.quote(code)}"
     )
     try:
-        sesion.get(entrada)
+        _, bienvenida = sesion.get(entrada)
     except SolError as e:
         raise SolError(
             "El login fue aceptado pero la casilla no canjeó el código de "
@@ -1192,11 +1191,13 @@ def leer_buzon_sunafil(ruc, usuario, clave):
     for clave_datos, etiqueta in BANDEJAS_SUNAFIL:
         try:
             html = abrir_bandeja_sunafil(sesion, etiqueta)
+            if os.environ.get("BUZON_GUARDAR"):
+                _guardar(clave_datos, html)
 
             if _es_inicio(html):
                 raise SolError(
-                    f"SUNAFIL devolvió la página de inicio en vez de «{etiqueta}». "
-                    "Puede que la sesión haya caducado o que el menú haya cambiado."
+                    f"SUNAFIL devolvió la página de inicio en vez de «{etiqueta}».",
+                    detalle=_pista_de_login(bienvenida),
                 )
 
             if clave_datos == "notificaciones":
@@ -1204,18 +1205,22 @@ def leer_buzon_sunafil(ruc, usuario, clave):
                 if not resultado[clave_datos] and _tabla_por_id(html, "dtNotificaciones") is None:
                     raise SolError(
                         "La bandeja se abrió pero no trae la tabla de "
-                        "notificaciones. Puede que SUNAFIL haya cambiado el id."
+                        "notificaciones. Puede que SUNAFIL haya cambiado el id.",
+                        detalle=_resumen_pagina(html),
                     )
             else:
                 resultado[clave_datos] = extraer_acciones_previas(html)
 
         except SolError as e:
-            errores[clave_datos] = e.mensaje
+            # Se guarda el detalle: sin él no se sabe si falló el menú, la
+            # sesión o el parseo, y se acaba adivinando.
+            errores[clave_datos] = (
+                f"{e.mensaje} Detalle: {e.detalle}" if e.detalle else e.mensaje
+            )
         except Exception as e:  # una bandeja rota no debe tumbar las demás
-            errores[clave_datos] = f"Fallo inesperado al leer «{etiqueta}»: {e}"
+            errores[clave_datos] = f"Fallo inesperado al leer «{etiqueta}»: {e!r}"
 
     if errores and len(errores) == len(BANDEJAS_SUNAFIL):
-        # Ninguna bandeja se pudo leer: es un fallo del puente, no un buzón vacío.
         raise SolError(
             "No se pudo leer ninguna bandeja de la casilla de SUNAFIL.",
             detalle=(
@@ -1227,6 +1232,47 @@ def leer_buzon_sunafil(ruc, usuario, clave):
     if errores:
         resultado["errores"] = errores
     return resultado
+
+
+def _guardar(nombre, html):
+    """Deja la respuesta en disco cuando se pide diagnóstico.
+
+    Se activa con BUZON_GUARDAR=<carpeta>. Es la única forma de ver qué
+    devuelve SUNAFIL de verdad: desde el sandbox del puente no se llega a la
+    casilla, así que sin este volcado se acaba adivinando.
+    """
+    carpeta = os.environ.get("BUZON_GUARDAR") or "."
+    os.makedirs(carpeta, exist_ok=True)
+    ruta = os.path.join(carpeta, f"bandeja-{nombre}.html")
+    with open(ruta, "w", encoding="utf-8", errors="ignore") as f:
+        f.write(html)
+    sys.stderr.write(f"[sol-bridge] guardado {ruta} ({len(html)} B)\n")
+
+
+def _resumen_pagina(html):
+    """Texto de la página, corto, para saber qué devolvió SUNAFIL."""
+    texto = re.sub(r"<script.*?</script>", " ", html, flags=re.S | re.I)
+    texto = re.sub(r"<style.*?</style>", " ", texto, flags=re.S | re.I)
+    texto = re.sub(r"<[^>]+>", " ", texto)
+    return re.sub(r"\s+", " ", unescape(texto)).strip()[:300]
+
+
+def _pista_de_login(html_bienvenida):
+    """Dice si la casilla quedó autenticada tras el canje.
+
+    Si la bienvenida sigue siendo un formulario de login, el problema es la
+    sesión; si trae el menú, el problema es la bandeja.
+    """
+    texto = _resumen_pagina(html_bienvenida)
+    parece_login = re.search(
+        r"iniciar sesi[oó]n|j_security_check|usuario|contrase[nñ]a", texto, re.I
+    )
+    if parece_login:
+        return (
+            "Tras canjear el código, la casilla devolvió el formulario de "
+            f"acceso, así que la sesión no quedó abierta. Página: {texto}"
+        )
+    return f"Página tras el canje: {texto}"
 
 
 class Manejador(BaseHTTPRequestHandler):

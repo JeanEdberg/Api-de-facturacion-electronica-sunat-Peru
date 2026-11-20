@@ -228,6 +228,45 @@ class LeerBuzonSunafilTest(unittest.TestCase):
             canje[0].startswith(puente.URL_CASILLA_SUNAFIL + puente.RUTA_REDIRECT_SUNAFIL)
         )
 
+    def test_nada_se_interpone_entre_el_login_y_el_canje_del_code(self):
+        """El code de OAuth caduca en segundos: la sonda va antes del login."""
+        orden = []
+
+        def autenticar(*a, **k):
+            orden.append("login")
+            return ("CODIGO", "ESTADO")
+
+        self.sesion.get = mock.Mock(
+            side_effect=lambda url: (orden.append("canje"), ("url", "<html></html>"))[1]
+        )
+
+        with mock.patch.object(
+            puente, "autenticar_sunafil", side_effect=autenticar
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", side_effect=lambda: (orden.append("sonda"), (True, "x"))[1]
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value="<html></html>"
+        ):
+            puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        self.assertEqual(orden[:3], ["sonda", "login", "canje"], orden)
+
+    def test_el_detalle_del_fallo_de_una_bandeja_no_se_pierde(self):
+        """Sin el detalle no se sabe si falló el menú, la sesión o el parseo."""
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("code", "state")
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente,
+            "abrir_bandeja_sunafil",
+            side_effect=puente.SolError("No hay menú.", detalle="Página: Login"),
+        ):
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        self.assertIn("Página: Login", ctx.exception.detalle)
+
     def test_si_la_casilla_no_responde_lo_dice_en_vez_de_devolver_vacio(self):
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("code", "state")
