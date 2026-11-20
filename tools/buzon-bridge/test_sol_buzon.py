@@ -260,6 +260,34 @@ class LeerBuzonSunafilTest(unittest.TestCase):
         self.assertIn("notificaciones", datos["errores"])
         self.assertIn("tabla", datos["errores"]["notificaciones"])
 
+    def test_usa_una_sola_sesion_para_login_y_bandejas(self):
+        """El JSESSIONID del login es lo que autoriza el POST de la bandeja."""
+        sesiones = []
+        original = puente.Sesion
+
+        def fabricar():
+            sesion = original()
+            sesiones.append(sesion)
+            return sesion
+
+        vista = []
+
+        def autenticar(ruc, usuario, clave, sesion=None):
+            vista.append(sesion)
+            return ("code", "state")
+
+        with mock.patch.object(puente, "Sesion", side_effect=fabricar), mock.patch.object(
+            puente, "autenticar_sunafil", side_effect=autenticar
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value="<html></html>"
+        ):
+            puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        self.assertEqual(len(sesiones), 1, "se creó más de una sesión")
+        self.assertIs(vista[0], sesiones[0], "el login no recibió esa sesión")
+
     def test_abre_cada_bandeja_con_su_propia_etiqueta_del_menu(self):
         """Leer una bandeja y parsear otra daba siempre cero acciones previas."""
         vacia = """

@@ -1154,7 +1154,10 @@ def leer_buzon_sunafil(ruc, usuario, clave):
     Si una bandeja falla, las demás se devuelven igual y el fallo se informa en
     `errores`: una bandeja caída no debe ocultar las otras.
     """
-    code, state = autenticar_sunafil(ruc, usuario, clave)
+    # Una sola sesión de principio a fin: el JSESSIONID que deja el login es lo
+    # que autoriza el POST que abre la bandeja.
+    sesion = Sesion()
+    code, state = autenticar_sunafil(ruc, usuario, clave, sesion=sesion)
 
     alcanzable, tls = _sondear_sunafil()
     if not alcanzable:
@@ -1165,7 +1168,6 @@ def leer_buzon_sunafil(ruc, usuario, clave):
             detalle=tls,
         )
 
-    sesion = Sesion()
     resultado = {clave_datos: [] for clave_datos, _ in BANDEJAS_SUNAFIL}
     errores = {}
 
