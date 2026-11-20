@@ -1169,6 +1169,23 @@ def leer_buzon_sunafil(ruc, usuario, clave):
             detalle=tls,
         )
 
+    # El login devuelve un `code` de OAuth2, pero la casilla no lo canjea sola:
+    # hay que volver a la `redirect_uri` con él, igual que hace el navegador.
+    # Sin este paso la sesión no queda autenticada y el menú no trae opciones.
+    entrada = (
+        f"{URL_CASILLA_SUNAFIL}{RUTA_REDIRECT_SUNAFIL}"
+        f"?state={urllib.parse.quote(state)}&code={urllib.parse.quote(code)}"
+    )
+    try:
+        sesion.get(entrada)
+    except SolError as e:
+        raise SolError(
+            "El login fue aceptado pero la casilla no canjeó el código de "
+            "acceso. Puede que el código caduque muy rápido o que SUNAFIL haya "
+            "cambiado el flujo de entrada.",
+            detalle=e.detalle,
+        )
+
     resultado = {clave_datos: [] for clave_datos, _ in BANDEJAS_SUNAFIL}
     errores = {}
 

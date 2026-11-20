@@ -202,6 +202,32 @@ class NotificacionesTest(unittest.TestCase):
 
 
 class LeerBuzonSunafilTest(unittest.TestCase):
+    def setUp(self):
+        # La sesión real abriría sockets; aquí solo interesa qué se le pide.
+        self.sesion = mock.Mock()
+        self.sesion.get = mock.Mock(return_value=("url", "<html></html>"))
+        parche = mock.patch.object(puente, "Sesion", return_value=self.sesion)
+        parche.start()
+        self.addCleanup(parche.stop)
+
+    def test_canjea_el_code_antes_de_abrir_las_bandejas(self):
+        """Sin canjear el code la casilla no queda autenticada y no hay menú."""
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("CODIGO", "ESTADO")
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value="<html></html>"
+        ):
+            puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        destinos = [c[0][0] for c in self.sesion.get.call_args_list]
+        canje = [d for d in destinos if "code=CODIGO" in d and "state=ESTADO" in d]
+        self.assertEqual(len(canje), 1, f"no se canjeó el code: {destinos}")
+        self.assertTrue(
+            canje[0].startswith(puente.URL_CASILLA_SUNAFIL + puente.RUTA_REDIRECT_SUNAFIL)
+        )
+
     def test_si_la_casilla_no_responde_lo_dice_en_vez_de_devolver_vacio(self):
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("code", "state")
@@ -267,6 +293,7 @@ class LeerBuzonSunafilTest(unittest.TestCase):
 
         def fabricar():
             sesion = original()
+            sesion.get = mock.Mock(return_value=("url", "<html></html>"))
             sesiones.append(sesion)
             return sesion
 
