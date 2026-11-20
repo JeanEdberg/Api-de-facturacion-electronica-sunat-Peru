@@ -407,6 +407,15 @@ class Manejador(BaseHTTPRequestHandler):
             return
 
         try:
+            # Este puente solo sabe leer el buzón de SUNAT. Si se pide otra
+            # entidad hay que decirlo, en vez de devolver datos de SUNAT con
+            # la etiqueta cambiada.
+            if entidad != "SUNAT":
+                raise SolError(
+                    f"El puente no lee el buzón de {entidad}. La casilla "
+                    "electrónica de SUNAFIL es otro sistema: configura su "
+                    "endpoint en la pestaña Accesos SOL."
+                )
             self._responder(200, {"data": leer_buzon(ruc, usuario, clave, entidad)})
         except SolError as e:
             self._responder(502, {"error": e.mensaje, "detalle": e.detalle})

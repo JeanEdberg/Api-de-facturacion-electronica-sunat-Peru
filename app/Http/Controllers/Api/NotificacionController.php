@@ -124,27 +124,33 @@ class NotificacionController extends Controller
     {
         $data = $request->validate([
             'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'entidad' => ['nullable', 'string', 'in:SUNAT,SUNAFIL'],
         ]);
 
         $companyId = $this->companyId($request, $data['company_id'] ?? null);
         $company = Company::findOrFail($companyId);
+        $entidad = $data['entidad'] ?? null;
 
         try {
-            $resultado = $this->service->sincronizar($company);
+            $resultado = $this->service->sincronizar($company, $entidad);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'No se pudo sincronizar el buzón',
+                'message' => $entidad
+                    ? "No se pudo sincronizar el buzón {$entidad}"
+                    : 'No se pudo sincronizar el buzón',
                 'error' => $e->getMessage(),
             ], 502);
         }
+
+        $sufijo = $entidad ? " de {$entidad}" : '';
 
         return response()->json([
             'success' => true,
             'data' => $resultado,
             'message' => $resultado['importadas'] > 0
-                ? "Sincronizado: {$resultado['importadas']} notificación(es)."
-                : 'Buzón sincronizado: sin notificaciones nuevas.',
+                ? "Sincronizado{$sufijo}: {$resultado['importadas']} notificación(es)."
+                : "Buzón{$sufijo} sincronizado: sin notificaciones nuevas.",
         ]);
     }
 

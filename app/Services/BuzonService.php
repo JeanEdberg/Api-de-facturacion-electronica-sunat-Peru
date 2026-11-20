@@ -112,7 +112,30 @@ class BuzonService
         return [
             'pendientes' => (clone $query)->where('estado', 'pendiente')->count(),
             'total' => (clone $query)->count(),
+            'por_entidad' => $this->conteoPorEntidad($companyId),
         ];
+    }
+
+    /**
+     * Total de avisos por entidad, para que el panel muestre los dos buzones
+     * con su propio contador sin pedir dos veces.
+     *
+     * @return array<string, int>
+     */
+    private function conteoPorEntidad(int $companyId): array
+    {
+        $conteo = array_fill_keys(self::ENTIDADES, 0);
+
+        $filas = Notificacion::where('company_id', $companyId)
+            ->selectRaw('entidad, count(*) as total')
+            ->groupBy('entidad')
+            ->pluck('total', 'entidad');
+
+        foreach ($filas as $nombre => $total) {
+            $conteo[$nombre] = (int) $total;
+        }
+
+        return $conteo;
     }
 
     /**
@@ -160,25 +183,32 @@ class BuzonService
     }
 
     /**
-     * Sincroniza el buzón de la empresa contra sus endpoints.
+     * Sincroniza el buzón de la empresa contra sus endpoints. Con `$entidad`
+     * solo se consulta ese buzón, para que SUNAT y SUNAFIL se puedan
+     * sincronizar por separado y un fallo en uno no arrastre al otro.
      *
      * @return array{importadas: int, fuentes: array<int, string>}
      */
-    public function sincronizar(Company $company): array
+    public function sincronizar(Company $company, ?string $entidad = null): array
     {
         $fuentes = $this->fuentes($company);
+
+        if ($entidad !== null) {
+            $fuentes = array_intersect_key($fuentes, [$entidad => true]);
+        }
 
         if (empty($fuentes)) {
             return ['importadas' => 0, 'fuentes' => []];
         }
 
         $importadas = 0;
-        foreach ($fuentes as $entidad => $endpoint) {
-            $importadas += $this->importarDesde($company, $entidad, $endpoint);
+        foreach ($fuentes as $nombre => $endpoint) {
+            $importadas += $this->importarDesde($company, $nombre, $endpoint);
         }
 
         Log::info('Buzón sincronizado', [
             'company_id' => $company->id,
+            'entidad' => $entidad,
             'importadas' => $importadas,
         ]);
 
@@ -268,7 +298,7 @@ class BuzonService
     {
         $token = $company->buzon_token ?: config('services.buzon.token');
 
-        $respuesta = Http::timeout(60)
+        $respuesta = Http::timeout(120)
             ->acceptJson()
             ->withHeaders(['User-Agent' => 'BuzonSUNAT/1.0'])
             ->when($token, fn ($http, $valor) => $http->withToken($valor))
