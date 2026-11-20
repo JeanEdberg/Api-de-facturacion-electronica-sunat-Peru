@@ -226,7 +226,7 @@ class LeerBuzonSunafilTest(unittest.TestCase):
             with self.assertRaises(puente.SolError) as ctx:
                 puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
 
-        self.assertIn("página de inicio", ctx.exception.mensaje)
+        self.assertIn("página de inicio", ctx.exception.detalle)
 
     def test_una_bandeja_vacia_devuelve_lista_vacia_sin_error(self):
         """Sin notificaciones es un resultado válido, no un fallo."""
@@ -254,10 +254,48 @@ class LeerBuzonSunafilTest(unittest.TestCase):
         ), mock.patch.object(
             puente, "abrir_bandeja_sunafil", return_value="<html><body>otra cosa</body></html>"
         ):
-            with self.assertRaises(puente.SolError) as ctx:
-                puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+            datos = puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
 
-        self.assertIn("no trae la tabla", ctx.exception.mensaje)
+        self.assertIn("notificaciones", datos["errores"])
+        self.assertIn("tabla", datos["errores"]["notificaciones"])
+
+    def test_abre_cada_bandeja_con_su_propia_etiqueta_del_menu(self):
+        """Leer una bandeja y parsear otra daba siempre cero acciones previas."""
+        vacia = """
+        <table id="formNotificacion:dtNotificaciones">
+        <thead><tr><th>N&uacute;mero</th></tr></thead><tbody></tbody></table>
+        """
+        acciones = """
+        <table><thead><tr><th>Registro</th><th>Plazo</th><th>Fecha L&iacute;mite</th></tr></thead>
+        <tbody><tr><td>0000122241 - 2026 - SUNAFIL</td><td>20</td><td>26/11/2026</td></tr>
+        </tbody></table>
+        """
+        respuestas = {
+            "Notificaciones de Fiscalización": vacia,
+            "Acciones Previas": acciones,
+        }
+        pedidas = []
+
+        def abrir(sesion, etiqueta="Notificaciones de Fiscalización"):
+            pedidas.append(etiqueta)
+            return respuestas[etiqueta]
+
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("code", "state")
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", side_effect=abrir
+        ):
+            datos = puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        self.assertEqual(pedidas, ["Notificaciones de Fiscalización", "Acciones Previas"])
+        self.assertEqual(datos["notificaciones"], [])
+        self.assertEqual(len(datos["acciones_previas"]), 1)
+        self.assertEqual(
+            datos["acciones_previas"][0]["registro"],
+            "0000122241 - 2026 - SUNAFIL",
+        )
 
     def test_devuelve_las_dos_bandejas_cuando_la_bandeja_se_abre(self):
         html = """

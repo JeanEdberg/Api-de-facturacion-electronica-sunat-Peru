@@ -1135,13 +1135,24 @@ def extraer_notificaciones(html_casilla):
     return filas
 
 
+# Cada bandeja es una pantalla distinta del menú, con su propio POST. Se
+# declaran aquí para no confundirlas: leer una y parsear la otra daba siempre
+# cero acciones previas.
+BANDEJAS_SUNAFIL = (
+    ("notificaciones", "Notificaciones de Fiscalización"),
+    ("acciones_previas", "Acciones Previas"),
+)
+
+
 def leer_buzon_sunafil(ruc, usuario, clave):
     """Lee la casilla electrónica de SUNAFIL y devuelve sus bandejas.
 
-    El login va contra el SSO y la bandeja se abre pulsando la opción del menú
-    (un POST de JSF con el ViewState de la página de inicio). Devuelve las
-    notificaciones de fiscalización y las acciones previas con sus días
-    restantes.
+    El login va contra el SSO y cada bandeja se abre pulsando su opción del
+    menú (un POST de JSF con el ViewState de la página de inicio). Se abre una
+    por una porque cada una es una pantalla distinta.
+
+    Si una bandeja falla, las demás se devuelven igual y el fallo se informa en
+    `errores`: una bandeja caída no debe ocultar las otras.
     """
     code, state = autenticar_sunafil(ruc, usuario, clave)
 
@@ -1155,29 +1166,47 @@ def leer_buzon_sunafil(ruc, usuario, clave):
         )
 
     sesion = Sesion()
-    html = abrir_bandeja_sunafil(sesion, "Notificaciones de Fiscalización")
+    resultado = {clave_datos: [] for clave_datos, _ in BANDEJAS_SUNAFIL}
+    errores = {}
 
-    if _es_inicio(html):
+    for clave_datos, etiqueta in BANDEJAS_SUNAFIL:
+        try:
+            html = abrir_bandeja_sunafil(sesion, etiqueta)
+
+            if _es_inicio(html):
+                raise SolError(
+                    f"SUNAFIL devolvió la página de inicio en vez de «{etiqueta}». "
+                    "Puede que la sesión haya caducado o que el menú haya cambiado."
+                )
+
+            if clave_datos == "notificaciones":
+                resultado[clave_datos] = extraer_notificaciones(html)
+                if not resultado[clave_datos] and _tabla_por_id(html, "dtNotificaciones") is None:
+                    raise SolError(
+                        "La bandeja se abrió pero no trae la tabla de "
+                        "notificaciones. Puede que SUNAFIL haya cambiado el id."
+                    )
+            else:
+                resultado[clave_datos] = extraer_acciones_previas(html)
+
+        except SolError as e:
+            errores[clave_datos] = e.mensaje
+        except Exception as e:  # una bandeja rota no debe tumbar las demás
+            errores[clave_datos] = f"Fallo inesperado al leer «{etiqueta}»: {e}"
+
+    if errores and len(errores) == len(BANDEJAS_SUNAFIL):
+        # Ninguna bandeja se pudo leer: es un fallo del puente, no un buzón vacío.
         raise SolError(
-            "SUNAFIL aceptó el login pero devolvió la página de inicio en vez "
-            "de la bandeja. Puede que la sesión haya caducado o que el menú "
-            "haya cambiado.",
-            detalle=f"code={code[:12]}… state={state}",
+            "No se pudo leer ninguna bandeja de la casilla de SUNAFIL.",
+            detalle=(
+                f"code={code[:12]}… state={state}. "
+                + " | ".join(f"{k}: {v}" for k, v in errores.items())
+            ),
         )
 
-    notificaciones = extraer_notificaciones(html)
-    if not notificaciones and _tabla_por_id(html, "dtNotificaciones") is None:
-        raise SolError(
-            "La bandeja se abrió pero no trae la tabla de notificaciones. "
-            "Puede que SUNAFIL haya cambiado el id o que el usuario no tenga "
-            "esa bandeja habilitada.",
-            detalle=f"code={code[:12]}… state={state}",
-        )
-
-    return {
-        "notificaciones": notificaciones,
-        "acciones_previas": extraer_acciones_previas(html),
-    }
+    if errores:
+        resultado["errores"] = errores
+    return resultado
 
 
 class Manejador(BaseHTTPRequestHandler):
