@@ -31,6 +31,33 @@ RECURSO_JS = "/si.inbox/faces/javax.faces.resource/js/bsf.js?ln=bsf"
 MARCAS_INICIO = ("formInicio_parque", "image-1.jpg", "La modificaci")
 
 
+def _una_linea(texto):
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def _volcar_menu(inicio):
+    """Imprime las etiquetas del menú con onclick o id de JSF.
+
+    Sirve para ver, en una sola pasada, cómo está hecho el menú cuando la
+    búsqueda no encuentra la opción esperada.
+    """
+    print("  No se encontró la opción. Elementos pulsables del menú:")
+    vistos = 0
+    for posicion, elemento in puente._candidatos(inicio):
+        apertura = re.match(r"<[^>]*>", elemento, re.S)
+        if not apertura:
+            continue
+        texto = _una_linea(re.sub(r"<[^>]+>", " ", elemento))[:90]
+        print(f"    {_una_linea(apertura.group(0))[:220]}")
+        print(f"      texto: {texto!r}")
+        vistos += 1
+        if vistos >= 25:
+            print("    ... (cortado a 25)")
+            break
+    if not vistos:
+        print("    (ninguno: la página no trae onclick ni ids de JSF)")
+
+
 def _resumen(nombre, html, carpeta):
     """Dice si la respuesta es la bandeja o la misma página de inicio."""
     tablas = re.findall(r'<table[^>]*\bid="([^"]+)"', html)
@@ -146,11 +173,16 @@ def main():
 
     def preparar():
         _, inicio = sesion.get(destino)
-        elemento = puente._elemento_pulsable(inicio, ETIQUETA)
-        if elemento is None:
+        bloque, posicion = puente._bloque_de_menu(inicio, ETIQUETA)
+        if bloque is None:
+            _volcar_menu(inicio)
             raise puente.SolError(f"El menú no ofrece «{ETIQUETA}».")
 
-        id_elemento, formulario, parametros, es_ajax = puente._accion_del_menu(elemento)
+        id_elemento, formulario, parametros, es_ajax = puente._accion_del_menu(bloque)
+        if not formulario:
+            formulario = puente._formulario_que_contiene(inicio, posicion)
+
+        print(f"  bloque   -> {_una_linea(bloque)[:300]}")
         print(f"  enlace   -> id={id_elemento!r}")
         print(f"  onclick  -> formulario={formulario!r} parametros={parametros}"
               f" ajax={'sí' if es_ajax else 'no'}")

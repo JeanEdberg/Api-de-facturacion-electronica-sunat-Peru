@@ -662,6 +662,56 @@ class ParametrosDelMenuTest(unittest.TestCase):
 
         self.assertEqual(puente._formulario_que_contiene(pagina, posicion), "formMenu2")
 
+    FORMAS = {
+        "li con enlace y contador": """
+        <form id="formMenu2"><ul><li><a href="#" id="formMenu2:a:1"
+        onclick="mojarra.ab(this,event,'action','@this','@all')">
+        <span>Notificaciones de Fiscalizaci&oacute;n</span></a>
+        <span id="formMenu2:a:9">7</span></li></ul></form>""",
+        "enlace pelado y onclick aparte": """
+        <form id="formMenu2"><ul><li><a href="#"><span>Notificaciones de Fiscalizaci&oacute;n</span></a>
+        <span id="formMenu2:b:0" onclick="mojarra.ab(this,event,'action','@this','@all')">7</span></li></ul></form>""",
+        "PrimeFaces con source": """
+        <form id="formMenu2"><ul><li><a href="#" id="formMenu2:c:1"
+        onclick="PrimeFaces.ab({source:'formMenu2:c:1',process:'@this'});return false">
+        <span>Notificaciones de Fiscalizaci&oacute;n</span></a></li></ul></form>""",
+        "divs sin li": """
+        <form id="formMenu2"><div><div id="formMenu2:d:1"
+        onclick="mojarra.ab(this,event,'action','@this','@all')">
+        Notificaciones de Fiscalizaci&oacute;n</div></div></form>""",
+        "menu anidado": """
+        <form id="formMenu2"><ul><li>Notificaciones<ul>
+        <li><a href="#" id="formMenu2:f:1" onclick="mojarra.ab(this,event,'action','@this','@all')">
+        Notificaciones de Fiscalizaci&oacute;n</a></li></ul></li></ul></form>""",
+    }
+
+    def test_reconoce_las_formas_de_menu_de_la_casilla(self):
+        """El menú no siempre usa <li><a onclick>: hay que aguantar variantes."""
+        for nombre, html in self.FORMAS.items():
+            with self.subTest(nombre):
+                elemento, _ = puente._bloque_de_menu(
+                    html, "Notificaciones de Fiscalización"
+                )
+                self.assertIsNotNone(elemento, f"no encontró el menú: {nombre}")
+
+                _, formulario, _, _ = puente._accion_del_menu(elemento)
+                self.assertEqual(formulario, "formMenu2", nombre)
+
+    def test_sin_prefijo_de_formulario_usa_el_que_lo_contiene(self):
+        html = """<form id="formMenu2">
+        <input type="hidden" name="javax.faces.ViewState" value="VS"/>
+        <div id="j_idt31" onclick="mojarra.ab(this,event,'action','@this','@all')">
+        Notificaciones de Fiscalizaci&oacute;n</div></form>"""
+        sesion = mock.Mock()
+        sesion.get.return_value = ("url", html)
+        sesion.post_ajax.return_value = ("url", "<html/>")
+
+        puente.abrir_bandeja_sunafil(sesion)
+
+        datos = sesion.post_ajax.call_args[0][1]
+        self.assertEqual(datos["javax.faces.ViewState"], "VS")
+        self.assertEqual(datos["javax.faces.source"], "j_idt31")
+
     def test_abrir_bandeja_envia_los_parametros_del_onclick(self):
         sesion = mock.Mock()
         sesion.get.return_value = ("url", self.HTML)

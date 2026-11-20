@@ -712,86 +712,139 @@ def _objeto_js(texto):
 def _formulario_que_contiene(html_casilla, posicion):
     """Id del último `<form>` abierto antes de `posicion`."""
     formulario = None
-    for m in re.finditer(r'<form\b[^>]*>', html_casilla[:posicion]):
-        ident = re.search(r'\bid\s*=\s*["\']([^"\']+)["\']', m.group(0))
+    for m in re.finditer(r"<form\b[^>]*>", html_casilla[:posicion]):
+        ident = re.search(r"""\bid\s*=\s*["']([^"']+)["']""", m.group(0))
         if ident:
             formulario = ident.group(1)
     return formulario
 
 
-def _bloque_de_menu(html_casilla, etiqueta):
-    """Devuelve el `<li>` del menú que contiene el texto `etiqueta`.
+def _elemento_en(html_casilla, inicio):
+    """HTML del elemento cuya etiqueta de apertura empieza en `inicio`."""
+    etiqueta = re.match(r"<(\w+)", html_casilla[inicio:])
+    if not etiqueta:
+        return html_casilla[inicio:inicio + 400]
+    nombre = etiqueta.group(1).lower()
 
-    Se trabaja con el `<li>` entero y no con el `<a>`: el texto visible puede
-    estar en un `<a>` sin atributos mientras el `onclick` y el id viven en otro
-    elemento del mismo punto del menú.
+    if nombre in ("input", "br", "img", "hr", "meta", "link"):
+        fin = html_casilla.find(">", inicio)
+        return html_casilla[inicio:fin + 1] if fin > 0 else html_casilla[inicio:]
+
+    # Se equilibra el anidamiento para no cortar en un hijo igual.
+    patron = re.compile(rf"<(/?){nombre}\b", re.I)
+    profundidad = 0
+    for m in patron.finditer(html_casilla, inicio):
+        if m.group(1):
+            profundidad -= 1
+            if profundidad == 0:
+                cierre = html_casilla.find(">", m.start())
+                return html_casilla[inicio:cierre + 1 if cierre > 0 else len(html_casilla)]
+        else:
+            profundidad += 1
+    return html_casilla[inicio:inicio + 1500]
+
+
+def _candidatos(html_casilla):
+    """Elementos que pueden disparar la acción de una opción del menú.
+
+    Se buscan etiquetas con `onclick` o con un id de JSF (los ids con `:`), que
+    es donde vive la acción. Así no hay que acertar si el menú usa `<li>`,
+    `<a>` o `<span>`.
     """
-    for m in re.finditer(r"<li\b", html_casilla):
-        bloque = html_casilla[m.start():]
-        corte = re.search(r"</li>", bloque)
-        if corte:
-            bloque = bloque[:corte.end()]
+    vistos = set()
+    for m in re.finditer(r"<[a-zA-Z][^>]*>", html_casilla):
+        apertura = m.group(0)
+        if "onclick" not in apertura.lower() and ":" not in apertura:
+            continue
+        if m.start() in vistos:
+            continue
+        vistos.add(m.start())
+        yield m.start(), _elemento_en(html_casilla, m.start())
 
-        visible = re.sub(r"<[^>]+>", " ", bloque)
+
+def _bloque_de_menu(html_casilla, etiqueta):
+    """Elemento pulsable del menú más pequeño cuyo texto contiene `etiqueta`.
+
+    Devuelve `(elemento, posicion)`. Se prefiere el más pequeño porque un
+    contenedor grande (el `<ul>` del menú, por ejemplo) también contiene el
+    texto de la opción y ganaría por aparecer antes en el documento.
+    """
+    buscada = etiqueta.lower()
+
+    def coincide(elemento):
+        visible = re.sub(r"<[^>]+>", " ", elemento)
         visible = re.sub(r"\s+", " ", unescape(visible)).strip()
-        if etiqueta.lower() in visible.lower():
-            return bloque, m.start()
+        return buscada in visible.lower()
+
+    # Un elemento con `onclick` manda sobre uno sin él, aunque sea más grande:
+    # el `<span>` con el texto no sabe cómo se pulsa la opción.
+    encontrados = [
+        (0 if "onclick" in elemento[:2000].lower() else 1, len(elemento), posicion, elemento)
+        for posicion, elemento in _candidatos(html_casilla)
+        if coincide(elemento)
+    ]
+    if encontrados:
+        _, _, posicion, elemento = min(encontrados, key=lambda t: t[:3])
+        return elemento, posicion
+
+    for m in re.finditer(r"<li\b", html_casilla):
+        elemento = _elemento_en(html_casilla, m.start())
+        if coincide(elemento):
+            return elemento, m.start()
+
     return None, None
 
 
 def _elemento_pulsable(html_casilla, etiqueta):
     """Id del elemento del menú que dispara la acción de `etiqueta`."""
-    bloque, _ = _bloque_de_menu(html_casilla, etiqueta)
-    if bloque is None:
+    elemento, _ = _bloque_de_menu(html_casilla, etiqueta)
+    if elemento is None:
         return None
-    return _accion_del_menu(bloque)[0]
+    return _accion_del_menu(elemento)[0]
 
 
-def _accion_del_menu(bloque):
+def _accion_del_menu(elemento):
     """Cómo hay que pedir la pantalla al pulsar una opción del menú.
 
-    Devuelve `(id_elemento, formulario, parametros, es_ajax)` a partir del
-    `<li>` completo, así que da igual en qué etiqueta esté cada atributo.
+    Devuelve `(id_elemento, formulario, parametros, es_ajax)`.
 
-    La casilla usa tres handlers: `BsF.submitForm('formMenu2',{...})` (submit
-    normal con campos extra), `PrimeFaces.ab({source:'id'})` y
+    La acción puede estar en la propia etiqueta del elemento o en un hijo (el
+    `<a>` con el texto y el `onclick` en otro sitio es habitual), así que se
+    toma la primera etiqueta que traiga `onclick` y, si no hay, la del elemento.
+
+    Los handlers posibles son `BsF.submitForm('formMenu2',{...})` (submit normal
+    con campos extra), `PrimeFaces.ab({source:'id'})` y
     `mojarra.ab(this,event,...)` (los dos últimos, AJAX).
     """
-    # El valor puede venir entre comillas dobles y contener simples dentro
-    # (`submitForm('formMenu2',{...})`), así que no vale cortar por cualquiera.
+    accionable = re.search(r"<[^>]*\bonclick\s*=[^>]*>", elemento, re.S)
+    if accionable is None:
+        accionable = re.search(r"<[^>]*>", elemento, re.S)
+    etiqueta_accion = accionable.group(0) if accionable else elemento
+
+    ident = re.search(r"""\bid\s*=\s*["']([^"']+)["']""", etiqueta_accion)
+    id_elemento = ident.group(1) if ident else None
+    if id_elemento is None:
+        for candidato in re.findall(r"""\bid\s*=\s*["']([^"']+)["']""", elemento):
+            if ":" in candidato:
+                id_elemento = candidato
+                break
+
+    # El onclick puede venir entre comillas dobles con simples dentro.
     codigo = ""
     for doble, simple in re.findall(
-        r'onclick\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', bloque
+        r"""onclick\s*=\s*(?:"([^"]*)"|'([^']*)')""", etiqueta_accion, re.S
     ):
         codigo += unescape(doble or simple)
 
-    # El id del elemento que lleva el onclick es el origen del evento.
-    id_elemento = None
-    etiqueta_con_onclick = re.search(
-        r"<[^>]*\bonclick\s*=[^>]*>", bloque, re.S
-    )
-    if etiqueta_con_onclick:
-        ident = re.search(
-            r'\bid\s*=\s*["\']([^"\']+)["\']', etiqueta_con_onclick.group(0)
-        )
-        id_elemento = ident.group(1) if ident else None
-
-    if id_elemento is None:
-        # Sin id en el enlace, se usa cualquier id del bloque que parezca JSF.
-        for ident in re.findall(r'\bid\s*=\s*["\']([^"\']+)["\']', bloque):
-            if ":" in ident:
-                id_elemento = ident
-                break
-
-    # submitForm: submit normal con parámetros explícitos.
     llamada = re.search(
-        r"submitForm\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\{.*?\})\s*\)", codigo, re.S
+        r"""submitForm\(\s*['"]([^'"]+)['"]\s*,\s*(\{.*?\})\s*\)""", codigo, re.S
     )
     if llamada:
         return id_elemento, llamada.group(1), _objeto_js(llamada.group(2)), False
 
-    # AJAX: el formulario es el prefijo del id o el que contiene el bloque.
-    formulario = id_elemento.split(":")[0] if id_elemento and ":" in id_elemento else None
+    formulario = None
+    if id_elemento and ":" in id_elemento:
+        formulario = id_elemento.split(":")[0]
     return id_elemento, formulario, {}, True
 
 
