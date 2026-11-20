@@ -54,8 +54,47 @@ HTML.
 La Clave SOL viaja en el cuerpo del POST, nunca en la query, para que no quede
 escrita en los logs de acceso.
 
+## Diagnóstico
+
+`GET /salud` no usa credenciales: comprueba que el puente llega al Menú SOL.
+
+```bash
+curl http://127.0.0.1:12002/salud
+# {"puente": "ok", "sunat_alcanzable": true, "detalle": ""}
+```
+
+Si `sunat_alcanzable` es `false`, el problema es de red y no de la Clave SOL.
+
+## Cómo autentica (verificado el 2026-11-10)
+
+El Menú SOL migró a OAuth2. Un POST directo a `j_security_check` con
+`RUC/usuario/clave` **ya no funciona** (devuelve 404). El flujo real:
+
+1. `GET MenuInternet.htm` → un JS con `redirect("<url>")`.
+2. `GET` esa URL → 302 a `/oauth2/loginMenuSol?state=...`, deja cookies.
+3. `POST /oauth2/j_security_check` con `tipo=2`, `custom_ruc`, `j_username`,
+   `j_password`, `originalUrl`, `lang` y `state`.
+   Credenciales buenas → `AutenticaMenuInternet.htm`; malas → `/oauth2/error`.
+4. Con la sesión abierta se busca el enlace del buzón en el menú.
+
+Dos detalles que cuestan tiempo si no se saben:
+
+- `state` y `originalUrl` no están en el HTML del formulario: hay que sacarlos
+  de la query del paso 2.
+- SUNAT corta la conexión (RST) si el `User-Agent` no parece un navegador. El
+  puente fija uno de Chrome; con el UA por defecto de Python no hay respuesta.
+
+## Cuidado con el captcha
+
+Tras **3 intentos fallidos** SUNAT empieza a pedir captcha y el login
+automatizado deja de funcionar. Por eso el puente hace **un solo intento** por
+petición y no reintenta nunca. Si la clave es incorrecta, hay que corregirla;
+insistir solo bloquea la cuenta.
+
 ## Estado
 
-El puente resuelve la autenticación y la lectura del buzón. Las rutas concretas
-del Menú SOL (`LOGIN` y `BUZON` en el script) son las que hay que ajustar si
-SUNAT cambia su HTML o sus endpoints, porque no están documentadas.
+Autenticación verificada contra SUNAT: el rechazo de credenciales inválidas se
+detecta correctamente. La lectura del buzón (`buscar_buzon`) localiza el enlace
+del buzón en el menú y tolera tanto JSON como tablas HTML, pero **no se ha
+podido probar con credenciales válidas**. Si SUNAT cambia el menú, ajusta
+`PISTAS_BUZON`.
