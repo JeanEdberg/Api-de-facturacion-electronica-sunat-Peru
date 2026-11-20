@@ -61,14 +61,27 @@ trae documento.
 La sesión no se guarda entre peticiones: cada descarga repite el login. Es más
 lento, pero no deja credenciales ni cookies vivas en el puente.
 
-Las filas que traen enlace de documento lo indican en `descarga`:
+Las filas que traen documentos lo indican en `documentos`, con los tipos que
+ofrecen:
 
 ```json
-{ "registro": "...", "descarga": { "tipo": "jsf", "destino": "formAcciones",
-  "parametros": { "param_uuid": "..." } } }
+{ "registro": "...", "documentos": ["carta", "constancia_acuse", "constancia_deposito"] }
 ```
 
-Si una fila no trae `descarga`, SUNAFIL no ofrece el documento por esa vía.
+Tipos posibles: `carta` (el PDF de la carta inductiva), `constancia_deposito`
+y `constancia_acuse`. Para descargar uno, añade `"tipo"` al POST:
+
+```json
+{ "ruc": "...", "usuario": "...", "clave": "...",
+  "bandeja": "acciones_previas", "indice": 0, "tipo": "constancia_deposito" }
+```
+
+Si una fila no trae `documentos`, SUNAFIL no ofrece ninguno por esa vía.
+
+Los documentos son botones `<button type="submit" name="...">`, no enlaces:
+se descargan enviando el formulario con ese botón pulsado. El `name` lleva un
+`j_idtNN` que cambia en cada despliegue, así que se lee de la página en el
+momento y no se guarda.
 
 ## Configuración en el ERP
 

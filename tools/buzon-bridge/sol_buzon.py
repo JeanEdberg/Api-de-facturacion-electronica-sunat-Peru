@@ -1040,36 +1040,73 @@ def _celdas(fila):
     return [_texto_celda(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S)]
 
 
-def _descarga_de_fila(fila):
-    """Acción que descarga el documento de una fila, si la hay.
+# Los tres botones de «Ver Documento», tal como los dibuja la casilla. Se
+# reconocen por el `title` (que es el tooltip que ve el usuario) y no por el id,
+# que es un `j_idtNN` generado y cambia en cada despliegue de SUNAFIL.
+BOTONES_DOCUMENTO = (
+    ("constancia_deposito", ("constancia de deposito",)),
+    ("constancia_acuse", ("constancia de acuse", "acuse de recibo")),
+)
 
-    La casilla dibuja la columna «Ver Documento» de varias formas según la
-    pantalla: un `onclick` con `mojarra.jsfcljs`, un `onclick` con
-    `PrimeFaces.ab`, un `<a href>` al archivo, o un `<img>` dentro de un enlace.
-    Quitar las etiquetas de la celda borra el enlace, así que se leen antes.
+# El botón de la carta no lleva `title`: sólo un icono de PDF. Es el único de
+# los tres sin texto, así que se reconoce por el icono.
+ICONO_CARTA = ("fa-file-pdf-o", "fa-file-pdf")
 
-    Devuelve `{"tipo": "jsf"|"ajax"|"url", ...}` o `None`. Se devuelve la
-    acción, no el PDF: descargarlo exige la sesión, y esa no sale del puente.
+
+def _botones_de_fila(fila):
+    """Botones de documento de una fila, con su nombre de formulario.
+
+    La casilla no usa enlaces: dibuja `<button type="submit" name="...">` y
+    envía el formulario con ese botón pulsado. El `onclick` sólo llama a
+    `BsF.ajax.callAjax`, que es un detalle de la interfaz; lo que el servidor
+    necesita es el `name` del botón.
+
+    Devuelve `{"carta": {...}, "constancia_deposito": {...}, ...}`.
     """
-    for celda in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S):
-        for onclick in re.findall(r"onclick\s*=\s*\"([^\"]*)\"", celda, re.I):
-            accion = _accion_de_onclick(onclick)
-            if accion:
-                return accion
-        for href in re.findall(r"href\s*=\s*\"([^\"]+)\"", celda, re.I):
-            if href.startswith("#") or href.lower().startswith("javascript:"):
-                continue
-            if re.search(r"\.pdf|\.zip|\.docx?|descarg|documento|archivo|uuid", href, re.I):
-                return {"tipo": "url", "destino": unescape(href), "parametros": {}}
-    return None
+    encontrados = {}
+    for boton in re.findall(r"<button\b.*?</button>", fila, re.S | re.I):
+        apertura = boton.split(">", 1)[0]
+        nombre = re.search(r"\bname\s*=\s*\"([^\"]+)\"", apertura)
+        if not nombre:
+            continue
+        # Un botón deshabilitado no se puede pulsar: el de «Leído» ya se usó.
+        if re.search(r"\bdisabled\b", apertura, re.I):
+            continue
+
+        titulo = re.search(r"\btitle\s*=\s*\"([^\"]*)\"", apertura)
+        texto = _sin_acentos(unescape(titulo.group(1))) if titulo else ""
+
+        clave = None
+        for candidata, pistas in BOTONES_DOCUMENTO:
+            if any(pista in texto for pista in pistas):
+                clave = candidata
+                break
+        if clave is None and any(icono in boton for icono in ICONO_CARTA):
+            clave = "carta"
+        if clave is None or clave in encontrados:
+            continue
+
+        encontrados[clave] = {
+            "boton": unescape(nombre.group(1)),
+            "titulo": unescape(titulo.group(1)) if titulo else "",
+        }
+    return encontrados
+
+
+def _descarga_de_fila(fila):
+    """Acciones de documento de una fila.
+
+    Se devuelven todas las que haya, no una: la carta y las constancias son
+    documentos distintos y el usuario elige cuál quiere.
+    """
+    return _botones_de_fila(fila)
 
 
 def _accion_de_onclick(onclick):
     """Traduce un `onclick` de la casilla a una acción de descarga.
 
-    Se reconocen las dos formas que usa el sistema: el POST de JSF clásico
-    (`mojarra.jsfcljs`) y el parcial de PrimeFaces (`PrimeFaces.ab`), que
-    necesita cabeceras de AJAX distintas.
+    Se mantiene para las pantallas que sí usan enlaces: el POST de JSF clásico
+    (`mojarra.jsfcljs`) y el parcial de PrimeFaces (`PrimeFaces.ab`).
     """
     if not onclick:
         return None
@@ -1090,8 +1127,6 @@ def _accion_de_onclick(onclick):
     if ab:
         opciones = _pares_js(ab.group(1))
         if opciones:
-            # `s` es la fuente (el componente pulsado) y `f` el formulario; con
-            # esos dos y el ViewState, PrimeFaces ejecuta la acción.
             return {
                 "tipo": "ajax",
                 "destino": opciones.get("f") or opciones.get("s") or "",
@@ -1239,9 +1274,9 @@ def extraer_acciones_previas(html_casilla):
             efectos = re.search(r"Efectos del Dep[oó]sito:?\s*([0-9/]+)", deposito)
             datos["fecha_efectos"] = efectos.group(1) if efectos else ""
             datos["fecha_deposito"] = deposito.split("Efectos")[0].strip()
-            descarga = _descarga_de_fila(fila)
-            if descarga:
-                datos["descarga"] = descarga
+            documentos = _botones_de_fila(fila)
+            if documentos:
+                datos["documentos"] = sorted(documentos)
             datos["dias_restantes"] = _dias_hasta(datos.get("fecha_limite", ""))
             datos["dias_habiles_restantes"] = _habiles_hasta(
                 datos.get("fecha_limite", "")
@@ -1420,16 +1455,16 @@ def _guardar(nombre, html):
     sys.stderr.write(f"[sol-bridge] guardado {ruta} ({len(html)} B)\n")
 
 
-def descargar_documento(ruc, usuario, clave, etiqueta, indice):
-    """Descarga el documento de una fila de una bandeja de SUNAFIL.
+def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
+    """Descarga un documento de una fila de la casilla de SUNAFIL.
 
-    Repite el camino completo porque la sesión no se guarda entre peticiones:
-    entrar, canjear el `code`, abrir la bandeja, localizar la fila y pulsar su
-    enlace. Devolver el PDF exige la sesión autenticada, y esa no sale nunca
-    del puente.
+    La casilla no expone una URL por documento: hay que abrir la bandeja,
+    localizar el botón de esa fila y enviar el formulario con ese botón
+    pulsado, que es lo que hace el navegador. `tipo` es `carta`,
+    `constancia_deposito` o `constancia_acuse`.
 
-    Devuelve `(nombre_sugerido, bytes)`. Lanza `SolError` si esa fila no tiene
-    documento o si SUNAFIL responde algo que no es un archivo.
+    Repite el login entero porque la sesión no se guarda entre peticiones.
+    Devuelve `(nombre_sugerido, bytes)`.
     """
     sesion = Sesion()
     code, state = autenticar_sunafil(ruc, usuario, clave, sesion=sesion)
@@ -1439,8 +1474,6 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice):
     )
     sesion.get(entrada)
 
-    # Se abre la bandeja con la misma función que lista, para que el índice de
-    # fila sea el mismo que vio el usuario en la respuesta JSON.
     html = abrir_bandeja_sunafil(sesion, etiqueta)
     filas = [
         f for f in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S) if "<td" in f
@@ -1451,52 +1484,38 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice):
             f"número {indice + 1}."
         )
 
-    accion = _descarga_de_fila(filas[indice])
-    if not accion:
+    botones = _botones_de_fila(filas[indice])
+    if not botones:
         raise SolError(
-            "Esa fila no trae enlace de documento. Puede que SUNAFIL lo muestre "
-            "solo dentro de la casilla o que la columna haya cambiado.",
+            "Esa fila no trae botones de documento. Puede que SUNAFIL haya "
+            "cambiado la pantalla o que el documento no esté disponible.",
             detalle=re.sub(r"\s+", " ", _texto_celda(filas[indice]))[:300],
         )
-
-    if accion["tipo"] == "url":
-        destino = urllib.parse.urljoin(URL_CASILLA_SUNAFIL, accion["destino"])
-        _, cabeceras, contenido = sesion.get_crudo(destino)
-    elif accion["tipo"] == "ajax":
-        # PrimeFaces manda `s` (componente pulsado) y `f` (formulario). Sin las
-        # cabeceras de AJAX el servidor restaura la vista y devuelve la página.
-        datos = _campos_ocultos(html, accion["destino"])
-        fuente = accion["parametros"].get("s") or accion["parametros"].get("u") or ""
-        datos.update(
-            {
-                "javax.faces.source": fuente,
-                "javax.faces.partial.execute": fuente or "@this",
-                "javax.faces.partial.render": accion["parametros"].get("u") or "@all",
-            }
-        )
-        datos.update(
-            {k: v for k, v in accion["parametros"].items() if k not in ("s", "f", "p", "u")}
-        )
-        _, cabeceras, contenido = sesion.post_ajax_crudo(
-            f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador", datos
-        )
-    else:
-        datos = _campos_ocultos(html, accion["destino"])
-        datos.update(accion["parametros"])
-        _, cabeceras, contenido = sesion.post_crudo(
-            f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador", datos
+    if tipo not in botones:
+        raise SolError(
+            f"Esa fila no ofrece «{tipo}». Ofrece: {', '.join(sorted(botones))}.",
+            detalle="Botones con title: "
+            + ", ".join(b["titulo"] for b in botones.values()),
         )
 
-    tipo = (cabeceras.get("Content-Type") or "").lower()
-    if "html" in tipo or contenido[:15].lstrip().startswith(b"<!DOCTYPE"):
+    # El formulario se envía con el botón pulsado: `name` del botón, sus campos
+    # ocultos y el ViewState de la página.
+    datos = _campos_ocultos(html, "formactosAdministrativos")
+    datos[botones[tipo]["boton"]] = botones[tipo]["boton"]
+    _, cabeceras, contenido = sesion.post_crudo(
+        f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador", datos
+    )
+
+    tipo_respuesta = (cabeceras.get("Content-Type") or "").lower()
+    if "html" in tipo_respuesta or contenido[:15].lstrip().lower().startswith(b"<!doctype"):
         raise SolError(
             "SUNAFIL devolvió una página en vez del documento. Suele ser la "
-            "sesión caducada o un enlace que ya no existe.",
+            "sesión caducada o un botón que ya no está disponible.",
             detalle=_resumen_pagina(contenido.decode("utf-8", "ignore")),
         )
 
     nombre = _nombre_de_cabecera(cabeceras.get("Content-Disposition", ""))
-    return nombre or "documento.pdf", contenido
+    return nombre or f"{tipo}.pdf", contenido
 
 
 def _nombre_de_cabecera(valor):
@@ -1671,9 +1690,10 @@ class Manejador(BaseHTTPRequestHandler):
             self._responder(400, {"error": "El índice de fila tiene que ser un número."})
             return
 
+        tipo = str(cuerpo.get("tipo") or "carta")
         try:
             nombre, contenido = descargar_documento(
-                ruc, usuario, clave, etiquetas[bandeja], indice
+                ruc, usuario, clave, etiquetas[bandeja], indice, tipo
             )
         except SolError as e:
             self._responder(502, {"error": e.mensaje, "detalle": e.detalle})

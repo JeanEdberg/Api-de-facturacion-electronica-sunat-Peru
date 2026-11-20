@@ -440,74 +440,92 @@ class ArranqueTest(unittest.TestCase):
         servidor.assert_not_called()
 
 
+BOTON_CARTA = (
+    '<button type="submit" id="formactosAdministrativos:dtAlertas:0:j_idt108" '
+    'name="formactosAdministrativos:dtAlertas:0:j_idt108" class="btn btn-danger" '
+    'onclick="BsF.ajax.callAjax(this, event,\'\',\'formactosAdministrativos\','
+    'null,null,null,null);;;return false;"><span><i class="fa fa-file-pdf-o"></i>'
+    "</span> </button>"
+)
+BOTON_DEPOSITO = (
+    '<button type="submit" id="formactosAdministrativos:dtAlertas:0:j_idt110" '
+    'name="formactosAdministrativos:dtAlertas:0:j_idt110" data-toggle="tooltip" '
+    'title="Descargar Constancia de Dep\u00f3sito" class="btn btn-primary">'
+    '<span><i class="fa fa-file"></i></span></button>'
+)
+BOTON_ACUSE = (
+    '<button type="submit" id="formactosAdministrativos:dtAlertas:0:j_idt112" '
+    'name="formactosAdministrativos:dtAlertas:0:j_idt112" data-toggle="tooltip" '
+    'title="Descargar Constancia de Acuse de Recibo" class="btn btn-success">'
+    '<span><i class="fa fa-bookmark"></i></span></button>'
+)
+BOTON_LEIDO = (
+    '<button type="submit" id="formactosAdministrativos:dtAlertas:0:j_idt105" '
+    'name="formactosAdministrativos:dtAlertas:0:j_idt105" data-toggle="tooltip" '
+    'title="Le\u00eddo" class="btn btn-default disabled" disabled="disabled">'
+    '<img id="x" src="visto.png" /></button>'
+)
+
+
+def _fila_con(celda_documento):
+    return (
+        "<tr><td>CARTAS INDUCTIVAS GENERAL</td>"
+        "<td>0000122241 - 2026 - SUNAFIL/DPPR/SDPA</td>"
+        "<td>23/10/2026 23:37</td><td>29/10/2026 12:51</td><td>29/10/2026</td>"
+        "<td>20</td><td>26/11/2026</td>"
+        f"<td>{celda_documento}</td></tr>"
+    )
+
+
+def _tabla_con(fila):
+    return (
+        "<table><thead><tr><th>Tipo de Requerimiento</th><th>Registro</th>"
+        "<th>Fecha de Dep\u00f3sito</th><th>Fecha de Acuse</th>"
+        "<th>Fecha de Notificaci\u00f3n</th><th>Plazo</th><th>Fecha L\u00edmite</th>"
+        "<th>Ver Documento</th></tr></thead>"
+        f"<tbody>{fila}</tbody></table>"
+    )
+
+
 class DescargaTest(unittest.TestCase):
-    """La columna «Ver Documento» se pierde al quitar las etiquetas."""
+    """Los documentos son botones `submit`, no enlaces: se pulsan por nombre."""
 
-    def _html(self, celda_documento):
-        fila = (
-            "<tr><td>CARTAS INDUCTIVAS GENERAL</td>"
-            "<td>0000122241 - 2026 - SUNAFIL/DPPR/SDPA</td>"
-            "<td>23/10/2026</td><td>29/10/2026</td><td>20</td>"
-            "<td>26/11/2026</td>"
-            f"<td>{celda_documento}</td></tr>"
-        )
-        return (
-            "<table><thead><tr><th>Tipo de Requerimiento</th><th>Registro</th>"
-            "<th>Fecha de Depósito</th><th>Fecha de Acuse</th><th>Plazo</th>"
-            "<th>Fecha Límite</th><th>Ver Documento</th></tr></thead>"
-            f"<tbody>{fila}</tbody></table>"
-        )
-
-    def test_lee_el_onclick_con_getelementbyid(self):
-        """La casilla escribe getElementById('form'), no el nombre a secas."""
-        html = self._html(
-            "<a href=\"#\" onclick=\"mojarra.jsfcljs(document.getElementById("
-            "'formAcciones'),{'formAcciones:0:j_idt44':'formAcciones:0:j_idt44',"
-            "'param_uuid':'ABC123'},'');return false\">PDF</a>"
-        )
-        accion = puente.extraer_acciones_previas(html)[0]["descarga"]
-
-        self.assertEqual(accion["tipo"], "jsf")
-        self.assertEqual(accion["destino"], "formAcciones")
-        self.assertEqual(accion["parametros"]["param_uuid"], "ABC123")
-
-    def test_lee_un_enlace_directo_al_pdf(self):
-        html = self._html('<a href="/si.inbox/Documento/descargar?uuid=ABC">PDF</a>')
-        accion = puente.extraer_acciones_previas(html)[0]["descarga"]
-
-        self.assertEqual(accion["tipo"], "url")
-        self.assertIn("uuid=ABC", accion["destino"])
-
-    def test_lee_primefaces_ab_con_claves_sin_comillas(self):
-        """PrimeFaces escribe {s:'...',f:'...'}: sin comillas en la clave."""
-        html = self._html(
-            "<a onclick=\"PrimeFaces.ab({s:'formactosAdministrativos:dtAlertas:0:j_idt105'"
-            ",f:'formactosAdministrativos'});return false\">PDF</a>"
-        )
-        accion = puente.extraer_acciones_previas(html)[0]["descarga"]
-
-        self.assertEqual(accion["tipo"], "ajax")
-        self.assertEqual(accion["destino"], "formactosAdministrativos")
-        self.assertEqual(accion["parametros"]["s"], "formactosAdministrativos:dtAlertas:0:j_idt105")
-
-    def test_un_tooltip_solo_no_es_un_enlace_de_descarga(self):
-        """El detalle real mostraba solo el tooltip de PrimeFaces."""
-        html = self._html(
-            "<span onmouseover=\"$(function () { $('#formactos:dtAlertas:0:j_idt105')"
-            ".tooltip({'delay':{show:0,hide:0}}) });\">Ver</span>"
-        )
+    def test_reconoce_los_tres_botones_de_la_casilla(self):
+        html = _tabla_con(_fila_con(BOTON_LEIDO + BOTON_CARTA + BOTON_DEPOSITO + BOTON_ACUSE))
         fila = puente.extraer_acciones_previas(html)[0]
-        self.assertNotIn("descarga", fila)
 
-    def test_sin_enlace_no_inventa_una_descarga(self):
-        html = self._html("<span>Ver</span>")
-        fila = puente.extraer_acciones_previas(html)[0]
-        self.assertNotIn("descarga", fila)
+        self.assertEqual(
+            fila["documentos"], ["carta", "constancia_acuse", "constancia_deposito"]
+        )
 
-    def test_un_onclick_que_no_es_jsf_no_cuenta(self):
-        html = self._html('<a href="#" onclick="alert(1)">PDF</a>')
+    def test_el_boton_de_leido_no_cuenta_porque_esta_deshabilitado(self):
+        html = _tabla_con(_fila_con(BOTON_LEIDO))
         fila = puente.extraer_acciones_previas(html)[0]
-        self.assertNotIn("descarga", fila)
+
+        self.assertNotIn("documentos", fila)
+
+    def test_devuelve_el_name_del_boton_no_el_id_generado(self):
+        """El `j_idtNN` cambia en cada despliegue; el `name` es lo que se envía."""
+        html = _tabla_con(_fila_con(BOTON_DEPOSITO))
+        botones = puente._botones_de_fila(_tabla_con(_fila_con(BOTON_DEPOSITO)).split("<tbody>")[1])
+
+        self.assertEqual(
+            botones["constancia_deposito"]["boton"],
+            "formactosAdministrativos:dtAlertas:0:j_idt110",
+        )
+
+    def test_un_tooltip_sin_boton_no_es_un_documento(self):
+        """El detalle real mostraba sólo el tooltip del botón «Leído»."""
+        html = _tabla_con(_fila_con("<span>Ver</span>"))
+        fila = puente.extraer_acciones_previas(html)[0]
+
+        self.assertNotIn("documentos", fila)
+
+    def test_sin_botones_no_inventa_documentos(self):
+        html = _tabla_con(_fila_con(""))
+        fila = puente.extraer_acciones_previas(html)[0]
+
+        self.assertNotIn("documentos", fila)
 
 
 class DescargarDocumentoTest(unittest.TestCase):
@@ -518,90 +536,76 @@ class DescargarDocumentoTest(unittest.TestCase):
         parche.start()
         self.addCleanup(parche.stop)
 
-    def _acciones(self, con_enlace=True):
-        celda = (
-            "<a href=\"#\" onclick=\"mojarra.jsfcljs(document.getElementById("
-            "'formAcciones'),{'param_uuid':'ABC'},'');return false\">PDF</a>"
-            if con_enlace
-            else "<span>Ver</span>"
-        )
+    def _acciones(self, botones=None):
+        botones = BOTON_DEPOSITO if botones is None else botones
         return (
-            "<table><thead><tr><th>Tipo de Requerimiento</th><th>Registro</th>"
-            "<th>Plazo</th><th>Fecha Límite</th><th>Ver Documento</th></tr></thead>"
-            "<tbody><tr><td>CARTA</td><td>0000122241 - 2026</td><td>20</td>"
-            f"<td>26/11/2026</td><td>{celda}</td></tr></tbody></table>"
+            '<form id="formactosAdministrativos">'
+            '<input type="hidden" name="javax.faces.ViewState" value="VS:9"/></form>'
+            + _tabla_con(_fila_con(botones))
         )
 
-    def test_devuelve_el_pdf_y_su_nombre(self):
+    def _descargar(self, tipo="constancia_deposito", botones=None, indice=0):
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("C", "S")
         ), mock.patch.object(
-            puente, "abrir_bandeja_sunafil", return_value=self._acciones()
-        ), mock.patch.object(
-            puente, "_campos_ocultos", return_value={"javax.faces.ViewState": "V"}
+            puente, "abrir_bandeja_sunafil", return_value=self._acciones(botones)
         ):
-            self.sesion.post_crudo = mock.Mock(
-                return_value=(
-                    "url",
-                    {
-                        "Content-Type": "application/pdf",
-                        "Content-Disposition": 'attachment; filename="carta.pdf"',
-                    },
-                    b"%PDF-1.4 datos",
-                )
-            )
-            nombre, contenido = puente.descargar_documento(
-                "20614684772", "MODDATOS", "clave", "Acciones Previas", 0
+            return puente.descargar_documento(
+                "20614684772", "MODDATOS", "clave", "Acciones Previas", indice, tipo
             )
 
-        self.assertEqual(nombre, "carta.pdf")
+    def test_envia_el_name_del_boton_pulsado(self):
+        """Lo que el servidor espera es el `name` del botón, no su id."""
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        self._descargar()
+
+        datos = self.sesion.post_crudo.call_args[0][1]
+        self.assertIn("formactosAdministrativos:dtAlertas:0:j_idt110", datos)
+        self.assertEqual(datos["javax.faces.ViewState"], "VS:9")
+
+    def test_devuelve_el_pdf_y_su_nombre(self):
+        self.sesion.post_crudo = mock.Mock(
+            return_value=(
+                "u",
+                {
+                    "Content-Type": "application/pdf",
+                    "Content-Disposition": 'attachment; filename="constancia.pdf"',
+                },
+                b"%PDF-1.4 datos",
+            )
+        )
+        nombre, contenido = self._descargar()
+
+        self.assertEqual(nombre, "constancia.pdf")
         self.assertTrue(contenido.startswith(b"%PDF"))
 
     def test_si_sunafil_devuelve_html_no_lo_hace_pasar_por_pdf(self):
-        with mock.patch.object(
-            puente, "autenticar_sunafil", return_value=("C", "S")
-        ), mock.patch.object(
-            puente, "abrir_bandeja_sunafil", return_value=self._acciones()
-        ), mock.patch.object(
-            puente, "_campos_ocultos", return_value={}
-        ):
-            self.sesion.post_crudo = mock.Mock(
-                return_value=(
-                    "url",
-                    {"Content-Type": "text/html"},
-                    b"<!DOCTYPE html><html>Login</html>",
-                )
-            )
-            with self.assertRaises(puente.SolError) as ctx:
-                puente.descargar_documento(
-                    "20614684772", "MODDATOS", "clave", "Acciones Previas", 0
-                )
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "text/html"}, b"<!DOCTYPE html><html>")
+        )
+        with self.assertRaises(puente.SolError) as ctx:
+            self._descargar()
 
         self.assertIn("página en vez del documento", ctx.exception.mensaje)
 
-    def test_una_fila_sin_enlace_lo_dice(self):
-        with mock.patch.object(
-            puente, "autenticar_sunafil", return_value=("C", "S")
-        ), mock.patch.object(
-            puente, "abrir_bandeja_sunafil", return_value=self._acciones(False)
-        ):
-            with self.assertRaises(puente.SolError) as ctx:
-                puente.descargar_documento(
-                    "20614684772", "MODDATOS", "clave", "Acciones Previas", 0
-                )
+    def test_pedir_un_documento_que_la_fila_no_ofrece(self):
+        with self.assertRaises(puente.SolError) as ctx:
+            self._descargar(tipo="carta")
 
-        self.assertIn("no trae enlace", ctx.exception.mensaje)
+        self.assertIn("no ofrece", ctx.exception.mensaje)
+        self.assertIn("constancia_deposito", ctx.exception.mensaje)
+
+    def test_una_fila_sin_botones_lo_dice(self):
+        with self.assertRaises(puente.SolError) as ctx:
+            self._descargar(botones="<span>nada</span>")
+
+        self.assertIn("no trae botones", ctx.exception.mensaje)
 
     def test_un_indice_fuera_de_rango_no_revienta(self):
-        with mock.patch.object(
-            puente, "autenticar_sunafil", return_value=("C", "S")
-        ), mock.patch.object(
-            puente, "abrir_bandeja_sunafil", return_value=self._acciones()
-        ):
-            with self.assertRaises(puente.SolError) as ctx:
-                puente.descargar_documento(
-                    "20614684772", "MODDATOS", "clave", "Acciones Previas", 99
-                )
+        with self.assertRaises(puente.SolError) as ctx:
+            self._descargar(indice=99)
 
         self.assertIn("se pidió la número 100", ctx.exception.mensaje)
 

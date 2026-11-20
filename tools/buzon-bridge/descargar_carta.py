@@ -8,6 +8,10 @@ Uso:
     python descargar_carta.py 20614684772 APIINMOA
     python descargar_carta.py 20614684772 APIINMOA --fila 2
     python descargar_carta.py 20614684772 APIINMOA --bandeja notificaciones
+    python descargar_carta.py 20614684772 APIINMOA --tipo constancia_deposito
+    python descargar_carta.py 20614684772 APIINMOA --tipo constancia_acuse
+
+Tipos: carta, constancia_deposito, constancia_acuse.
 
 La clave se pide sin mostrarla y no se guarda en ningún sitio.
 """
@@ -28,6 +32,7 @@ def main():
     ruc, usuario = sys.argv[1].strip(), sys.argv[2].strip()
     bandeja = "acciones_previas"
     indice = 0
+    tipo = "carta"
 
     resto = sys.argv[3:]
     for i, arg in enumerate(resto):
@@ -35,6 +40,8 @@ def main():
             bandeja = resto[i + 1]
         if arg == "--fila" and i + 1 < len(resto):
             indice = int(resto[i + 1]) - 1
+        if arg == "--tipo" and i + 1 < len(resto):
+            tipo = resto[i + 1]
 
     etiquetas = dict(puente.BANDEJAS_SUNAFIL)
     if bandeja not in etiquetas:
@@ -47,7 +54,7 @@ def main():
 
     try:
         nombre, contenido = puente.descargar_documento(
-            ruc, usuario, clave, etiquetas[bandeja], indice
+            ruc, usuario, clave, etiquetas[bandeja], indice, tipo
         )
     except puente.SolError as e:
         print(f"\nFALLÓ: {e.mensaje}")
