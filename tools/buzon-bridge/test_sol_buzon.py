@@ -377,9 +377,14 @@ class ArranqueTest(unittest.TestCase):
 class EnrutadoTest(unittest.TestCase):
     """Ejercita `do_POST` de verdad, con los lectores simulados."""
 
-    def _post(self, entidad):
+    def _post(self, entidad, ruta="/buzon", crudo=None):
         manejador = puente.Manejador.__new__(puente.Manejador)
         manejador._responder = mock.Mock()
+        manejador.path = ruta
+        if crudo is not None:
+            manejador.headers = {"Content-Length": str(len(crudo))}
+            manejador.rfile = io.BytesIO(crudo)
+            return manejador
         manejador.headers = {"Content-Length": "0"}
         cuerpo = json.dumps(
             {
@@ -414,6 +419,31 @@ class EnrutadoTest(unittest.TestCase):
         leer_sunafil.assert_called_once()
         leer.assert_not_called()
         manejador._responder.assert_called_once_with(200, {"data": [{"id": 2}]})
+
+    def test_un_post_a_otra_ruta_dice_que_la_ruta_no_existe(self):
+        """Un POST mal escrito daba «JSON inválido» y ocultaba el problema."""
+        manejador = self._post("SUNAT", ruta="/new")
+        manejador.do_POST()
+
+        codigo, cuerpo = manejador._responder.call_args[0]
+        self.assertEqual(codigo, 404)
+        self.assertIn("/new", cuerpo["error"])
+        self.assertIn("/buzon", cuerpo["detalle"])
+
+    def test_un_cuerpo_que_no_es_json_se_muestra_para_diagnosticar(self):
+        manejador = self._post("SUNAT", crudo=b"esto no es json")
+        manejador.do_POST()
+
+        codigo, cuerpo = manejador._responder.call_args[0]
+        self.assertEqual(codigo, 400)
+        self.assertIn("esto no es json", cuerpo["detalle"])
+
+    def test_una_lista_en_vez_de_objeto_se_rechaza(self):
+        manejador = self._post("SUNAT", crudo=b'["ruc","clave"]')
+        manejador.do_POST()
+
+        codigo, _ = manejador._responder.call_args[0]
+        self.assertEqual(codigo, 400)
 
     def test_entidad_desconocida_no_devuelve_datos_de_otra(self):
         manejador = self._post("SUNARP")

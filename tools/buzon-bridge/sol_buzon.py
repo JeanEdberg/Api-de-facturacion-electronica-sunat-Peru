@@ -81,6 +81,7 @@ NAVEGADOR = (
 )
 
 PUERTO = int(os.environ.get("BUZON_BRIDGE_PORT", "12002"))
+RUTA_BUZON = "/buzon"
 HOST = os.environ.get("BUZON_BRIDGE_HOST", "0.0.0.0")
 TOKEN = os.environ.get("BUZON_BRIDGE_TOKEN", "")
 
@@ -1253,15 +1254,44 @@ class Manejador(BaseHTTPRequestHandler):
             )
 
     def do_POST(self):  # noqa: N802 (nombre impuesto por BaseHTTPRequestHandler)
+        # Sin esto, un POST a cualquier ruta entraba y fallaba por el JSON, y
+        # el usuario veía «cuerpo inválido» cuando el problema era la URL.
+        if not self.path.startswith(RUTA_BUZON):
+            self._responder(
+                404,
+                {
+                    "error": f"Ruta no encontrada: {self.path}",
+                    "detalle": f"El puente lee buzones en POST {RUTA_BUZON}.",
+                },
+            )
+            return
+
         if TOKEN and self.headers.get("Authorization") != f"Bearer {TOKEN}":
             self._responder(401, {"error": "Token del puente inválido o ausente."})
             return
 
         try:
             largo = int(self.headers.get("Content-Length") or 0)
-            cuerpo = json.loads(self.rfile.read(largo) or b"{}")
+            crudo = self.rfile.read(largo) or b"{}"
+            cuerpo = json.loads(crudo)
         except (ValueError, json.JSONDecodeError):
-            self._responder(400, {"error": "Cuerpo JSON inválido."})
+            self._responder(
+                400,
+                {
+                    "error": "El cuerpo no es JSON válido.",
+                    "detalle": (
+                        "Recibido: " + crudo[:200].decode("utf-8", "replace")
+                        if "crudo" in locals()
+                        else "No llegó cuerpo."
+                    ),
+                },
+            )
+            return
+
+        if not isinstance(cuerpo, dict):
+            self._responder(
+                400, {"error": "El cuerpo tiene que ser un objeto JSON, no una lista."}
+            )
             return
 
         ruc = str(cuerpo.get("ruc") or "").strip()
