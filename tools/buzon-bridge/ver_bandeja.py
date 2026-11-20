@@ -93,6 +93,12 @@ def _diagnostico(html):
         filas = len(re.findall(r"<tr[^>]*>", tabla))
         print(f"  {i}) {re.sub(chr(10), ' ', etiqueta)[:160]}")
         print(f"     filas={filas}  tamaño={len(tabla)}")
+        encabezados = [
+            re.sub(r"\s+", " ", puente._texto_celda(c))
+            for c in re.findall(r"<th[^>]*>(.*?)</th>", tabla, re.S)
+        ]
+        if encabezados:
+            print(f"     encabezados: {encabezados}")
 
     ids = re.findall(r'\bid\s*=\s*"([^"]+)"', html)
     candidos = [i for i in ids if re.search(r"notific|accion|dt|tabla|lista", i, re.I)]
