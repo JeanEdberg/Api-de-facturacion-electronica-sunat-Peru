@@ -946,6 +946,11 @@ def _campos_ocultos(html_casilla, id_formulario):
 
 
 def abrir_bandeja_sunafil(sesion, etiqueta="Notificaciones de Fiscalización"):
+    """Abre una bandeja y devuelve sólo el HTML. Ver `_abrir_bandeja`."""
+    return _abrir_bandeja(sesion, etiqueta)[1]
+
+
+def _abrir_bandeja(sesion, etiqueta="Notificaciones de Fiscalización"):
     """Abre una pantalla del menú de la casilla y devuelve la respuesta.
 
     No hay ruta GET para la bandeja: se pulsa la opción del menú, que es un
@@ -987,10 +992,13 @@ def abrir_bandeja_sunafil(sesion, etiqueta="Notificaciones de Fiscalización"):
                 "javax.faces.partial.render": "@all",
             }
         )
-        _, html = sesion.post_ajax(url, datos)
+        url_final, html = sesion.post_ajax(url, datos)
     else:
-        _, html = sesion.post(url, datos)
-    return html
+        url_final, html = sesion.post(url, datos)
+    # La URL importa: el POST del documento tiene que ir a la vista que quedó
+    # abierta. Enviarlo a /Inicio/Empleador restaura la vista de inicio y
+    # SUNAFIL devuelve la página de bienvenida en vez del archivo.
+    return url_final, html
 
 
 # Marcas que solo aparecen en la página de inicio de la casilla. Si el POST
@@ -1086,9 +1094,16 @@ def _botones_de_fila(fila):
         if clave is None or clave in encontrados:
             continue
 
+        # `BsF.ajax.callAjax(...); return false` cancela el submit normal: ese
+        # botón sólo funciona por AJAX. Los de constancia no lo llevan y van
+        # por submit normal. Confundirlos devuelve la página de inicio.
+        exige_ajax = bool(
+            re.search(r"BsF\.ajax\.callAjax", apertura) and re.search(r"return\s+false", apertura)
+        )
         encontrados[clave] = {
             "boton": unescape(nombre.group(1)),
             "titulo": unescape(titulo.group(1)) if titulo else "",
+            "ajax": exige_ajax,
         }
     return encontrados
 
@@ -1474,7 +1489,7 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
     )
     sesion.get(entrada)
 
-    html = abrir_bandeja_sunafil(sesion, etiqueta)
+    url_bandeja, html = _abrir_bandeja(sesion, etiqueta)
     filas = [
         f for f in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S) if "<td" in f
     ]
@@ -1499,12 +1514,22 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
         )
 
     # El formulario se envía con el botón pulsado: `name` del botón, sus campos
-    # ocultos y el ViewState de la página.
+    # ocultos y el ViewState de la página de la bandeja (no el de inicio).
     datos = _campos_ocultos(html, "formactosAdministrativos")
-    datos[botones[tipo]["boton"]] = botones[tipo]["boton"]
-    _, cabeceras, contenido = sesion.post_crudo(
-        f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador", datos
-    )
+    nombre_boton = botones[tipo]["boton"]
+    datos[nombre_boton] = nombre_boton
+
+    if botones[tipo].get("ajax"):
+        datos.update(
+            {
+                "javax.faces.source": nombre_boton,
+                "javax.faces.partial.execute": nombre_boton,
+                "javax.faces.partial.render": "@all",
+            }
+        )
+        _, cabeceras, contenido = sesion.post_ajax_crudo(url_bandeja, datos)
+    else:
+        _, cabeceras, contenido = sesion.post_crudo(url_bandeja, datos)
 
     tipo_respuesta = (cabeceras.get("Content-Type") or "").lower()
     if "html" in tipo_respuesta or contenido[:15].lstrip().lower().startswith(b"<!doctype"):

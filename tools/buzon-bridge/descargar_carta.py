@@ -10,8 +10,11 @@ Uso:
     python descargar_carta.py 20614684772 APIINMOA --bandeja notificaciones
     python descargar_carta.py 20614684772 APIINMOA --tipo constancia_deposito
     python descargar_carta.py 20614684772 APIINMOA --tipo constancia_acuse
+    python descargar_carta.py 20614684772 APIINMOA --todos
 
 Tipos: carta, constancia_deposito, constancia_acuse.
+`--todos` prueba los tres y dice cuál funciona: útil cuando no se sabe qué
+botón responde con el archivo y cuál abre una pantalla intermedia.
 
 La clave se pide sin mostrarla y no se guarda en ningún sitio.
 """
@@ -33,6 +36,7 @@ def main():
     bandeja = "acciones_previas"
     indice = 0
     tipo = "carta"
+    todos = "--todos" in sys.argv
 
     resto = sys.argv[3:]
     for i, arg in enumerate(resto):
@@ -52,27 +56,34 @@ def main():
         f"Clave SOL de {usuario} (no se muestra ni se guarda): "
     )
 
-    try:
-        nombre, contenido = puente.descargar_documento(
-            ruc, usuario, clave, etiquetas[bandeja], indice, tipo
-        )
-    except puente.SolError as e:
-        print(f"\nFALLÓ: {e.mensaje}")
-        if e.detalle:
-            print(f"Detalle: {e.detalle[:600]}")
-        return 1
+    tipos = ["carta", "constancia_deposito", "constancia_acuse"] if todos else [tipo]
+    fallos = 0
 
-    ruta = os.path.join(os.getcwd(), nombre)
-    with open(ruta, "wb") as f:
-        f.write(contenido)
+    for cual in tipos:
+        print(f"\n--- {cual} ---")
+        try:
+            nombre, contenido = puente.descargar_documento(
+                ruc, usuario, clave, etiquetas[bandeja], indice, cual
+            )
+        except puente.SolError as e:
+            print(f"FALLÓ: {e.mensaje}")
+            if e.detalle:
+                print(f"Detalle: {e.detalle[:300]}")
+            fallos += 1
+            continue
 
-    print(f"\nGuardado: {ruta}")
-    print(f"Tamaño:   {len(contenido)} bytes")
-    if contenido.startswith(b"%PDF"):
-        print("Parece un PDF válido.")
-    else:
-        print("OJO: no empieza por %PDF. Ábrelo antes de darlo por bueno.")
-    return 0
+        ruta = os.path.join(os.getcwd(), nombre)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+
+        print(f"Guardado: {ruta}")
+        print(f"Tamaño:   {len(contenido)} bytes")
+        if contenido.startswith(b"%PDF"):
+            print("Parece un PDF válido.")
+        else:
+            print("OJO: no empieza por %PDF. Ábrelo antes de darlo por bueno.")
+
+    return 1 if fallos == len(tipos) else 0
 
 
 if __name__ == "__main__":

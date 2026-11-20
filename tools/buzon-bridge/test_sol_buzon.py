@@ -548,7 +548,7 @@ class DescargarDocumentoTest(unittest.TestCase):
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("C", "S")
         ), mock.patch.object(
-            puente, "abrir_bandeja_sunafil", return_value=self._acciones(botones)
+            puente, "_abrir_bandeja", return_value=("http://u/Empleador", self._acciones(botones))
         ):
             return puente.descargar_documento(
                 "20614684772", "MODDATOS", "clave", "Acciones Previas", indice, tipo
@@ -608,6 +608,51 @@ class DescargarDocumentoTest(unittest.TestCase):
             self._descargar(indice=99)
 
         self.assertIn("se pidió la número 100", ctx.exception.mensaje)
+
+    def test_la_carta_va_por_ajax_porque_su_onclick_cancela_el_submit(self):
+        """El botón de la carta lleva `return false`: exige POST AJAX."""
+        self.sesion.post_ajax_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "text/html"}, b"<html>inicio</html>")
+        )
+        self._descargar(tipo="carta", botones=BOTON_CARTA)
+
+        self.sesion.post_ajax_crudo.assert_called_once()
+        self.sesion.post_crudo.assert_not_called()
+        datos = self.sesion.post_ajax_crudo.call_args[0][1]
+        self.assertEqual(
+            datos["javax.faces.source"], "formactosAdministrativos:dtAlertas:0:j_idt108"
+        )
+
+    def test_la_constancia_va_por_submit_normal(self):
+        """Los botones de constancia no tienen onclick: submit normal."""
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        self.sesion.post_ajax_crudo = mock.Mock()
+        self._descargar(tipo="constancia_deposito", botones=BOTON_DEPOSITO)
+
+        self.sesion.post_crudo.assert_called_once()
+        self.sesion.post_ajax_crudo.assert_not_called()
+
+    def test_el_post_va_a_la_url_de_la_bandeja_no_a_la_de_inicio(self):
+        """Enviarlo a /Inicio/Empleador devolvía la página de bienvenida."""
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "_abrir_bandeja", return_value=("http://casilla/vista", self._acciones())
+        ):
+            puente.descargar_documento(
+                "20614684772", "MODDATOS", "clave", "Acciones Previas", 0,
+                "constancia_deposito",
+            )
+
+        self.assertEqual(self.sesion.post_crudo.call_args[0][0], "http://casilla/vista")
 
 
 class DiasHabilesTest(unittest.TestCase):
