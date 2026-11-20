@@ -29,6 +29,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sol_buzon as puente  # noqa: E402
 
 
+# El `code` del SSO y el `JSESSIONID` de la casilla son credenciales. Si acaban
+# en un nombre de archivo o en el índice, se filtran con solo compartir la
+# carpeta, así que se tapan antes de escribir nada.
+SECRETOS = re.compile(r"(code|jsessionid|ticket|token|password)=([^&;\s]+)", re.I)
+
+
+def _limpiar(url):
+    """Tapa los valores sensibles de una URL, conservando su forma."""
+    return SECRETOS.sub(lambda m: f"{m.group(1)}=<oculto>", url)
+
+
 class Grabador(urllib.request.BaseHandler):
     """Anota cada respuesta, incluidas las redirecciones intermedias."""
 
@@ -49,7 +60,10 @@ class Grabador(urllib.request.BaseHandler):
         # para no dejar vacío al código que sigue el flujo.
         response.read = lambda *a, **k: cuerpo
 
-        nombre = f"{self.n:02d}_{re.sub(r'[^a-zA-Z0-9]+', '-', url)[-70:]}"
+        # El nombre sale de la ruta, sin query: la query lleva el `code`.
+        partes = urllib.parse.urlparse(url)
+        base = f"{partes.netloc}{partes.path}"
+        nombre = f"{self.n:02d}_{re.sub(r'[^a-zA-Z0-9]+', '-', base)[-70:]}"
         extension = ".json" if "json" in tipo else ".html"
         ruta = os.path.join(self.carpeta, nombre + extension)
         with open(ruta, "wb") as f:
@@ -57,7 +71,7 @@ class Grabador(urllib.request.BaseHandler):
 
         self.lineas.append(
             f"{self.n:02d}  {estado}  {tipo.split(';')[0]:<28} "
-            f"{len(cuerpo):>8} B  {url}"
+            f"{len(cuerpo):>8} B  {_limpiar(url)}"
         )
         return response
 

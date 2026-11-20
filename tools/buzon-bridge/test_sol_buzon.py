@@ -244,6 +244,50 @@ class GrabadorTest(unittest.TestCase):
         with open(os.path.join(carpeta, archivos[0]), "rb") as f:
             self.assertEqual(f.read(), b'{"rows": [1, 2]}')
 
+    def _respuesta(self, url):
+        respuesta = mock.Mock()
+        respuesta.geturl.return_value = url
+        respuesta.status = 302
+        respuesta.code = 302
+        respuesta.headers = {"Content-Type": "text/html"}
+        respuesta.read.return_value = b""
+        return respuesta
+
+    def test_el_jwt_no_acaba_en_el_nombre_del_archivo(self):
+        """Compartir la carpeta no debe filtrar el `code` del SSO."""
+        import tempfile
+
+        import capturar_sunafil as captura
+
+        carpeta = tempfile.mkdtemp()
+        grabador = captura.Grabador(carpeta)
+        url = (
+            "https://casillaelectronica.sunafil.gob.pe/si.inbox/Login/Empresa"
+            "?state=s&code=eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.SECRETO"
+        )
+
+        grabador.http_response(mock.Mock(), self._respuesta(url))
+
+        archivo = os.listdir(carpeta)[0]
+        self.assertNotIn("eyJ0eXAi", archivo)
+        self.assertNotIn("SECRETO", archivo)
+
+    def test_el_indice_tapa_el_code_y_el_jsessionid(self):
+        import tempfile
+
+        import capturar_sunafil as captura
+
+        carpeta = tempfile.mkdtemp()
+        grabador = captura.Grabador(carpeta)
+        url = "https://x.gob.pe/si.inbox/a?code=eyJhbGciOi.SECRETO&state=s"
+
+        grabador.http_response(mock.Mock(), self._respuesta(url))
+
+        linea = grabador.lineas[0]
+        self.assertNotIn("SECRETO", linea)
+        self.assertIn("code=<oculto>", linea)
+        self.assertIn("state=s", linea)
+
 
 class DetectarContextoTlsTest(unittest.TestCase):
     """El Tomcat de SUNAFIL falla a SECLEVEL=2; hay que bajar de nivel."""
