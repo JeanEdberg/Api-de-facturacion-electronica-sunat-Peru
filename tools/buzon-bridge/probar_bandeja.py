@@ -146,23 +146,26 @@ def main():
 
     def preparar():
         _, inicio = sesion.get(destino)
-        formulario, parametros = puente._parametros_del_menu(inicio, ETIQUETA)
-        if formulario is None:
-            print("  AVISO: el menú no tiene onclick utilizable; se adivina el botón.")
-            formulario = "formMenu2"
-            boton = puente._boton_de_menu(inicio, ETIQUETA)
-            parametros = {boton: boton}
-        else:
-            print(f"  onclick -> formulario={formulario!r} parametros={parametros}")
+        elemento = puente._elemento_pulsable(inicio, ETIQUETA)
+        if elemento is None:
+            raise puente.SolError(f"El menú no ofrece «{ETIQUETA}».")
+
+        id_elemento, formulario, parametros, es_ajax = puente._accion_del_menu(elemento)
+        print(f"  enlace   -> id={id_elemento!r}")
+        print(f"  onclick  -> formulario={formulario!r} parametros={parametros}"
+              f" ajax={'sí' if es_ajax else 'no'}")
+
         campos = puente._campos_ocultos(inicio, formulario)
-        return campos, parametros
+        campos.update(parametros)
+        if id_elemento:
+            campos[id_elemento] = id_elemento
+        return campos, id_elemento
 
     print(f"\n{'=' * 72}\nPRUEBAS\n{'=' * 72}")
 
     # 1. POST con el formulario completo, como hace `submitForm`.
     try:
-        campos, parametros = preparar()
-        campos.update(parametros)
+        campos, fuente = preparar()
         _, html = sesion.post(destino, campos)
         _resumen("1) POST de formulario completo", html, carpeta)
     except puente.SolError as e:
@@ -170,9 +173,7 @@ def main():
 
     # 2. POST parcial de JSF con source/execute/render, como PrimeFaces.
     try:
-        campos, parametros = preparar()
-        campos.update(parametros)
-        fuente = next(iter(parametros), "formMenu2")
+        campos, fuente = preparar()
         campos.update(
             {
                 "javax.faces.source": fuente,
@@ -187,10 +188,10 @@ def main():
 
     # 3. POST parcial mínimo, por si el servidor solo mira la cabecera.
     try:
-        campos, parametros = preparar()
+        campos, _ = preparar()
         _, html = sesion.post_ajax(
             destino,
-            {**parametros, "javax.faces.ViewState": campos["javax.faces.ViewState"]},
+            {**campos, "javax.faces.ViewState": campos["javax.faces.ViewState"]},
         )
         _resumen("3) POST parcial mínimo", html, carpeta)
     except puente.SolError as e:

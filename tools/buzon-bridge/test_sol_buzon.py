@@ -490,14 +490,20 @@ class AnalizarCapturaTest(unittest.TestCase):
 class AbrirBandejaSunafilTest(unittest.TestCase):
     """La bandeja se abre con un POST de JSF, no con un GET."""
 
+    # Menú real de la casilla: el enlace lleva el onclick y un contador al lado
+    # comparte prefijo de id, que es justo lo que confundía al puente.
     INICIO = """
     <form id="formMenu2" action="/si.inbox/Inicio/Empleador">
     <input type="hidden" name="formMenu2" value="formMenu2" />
     <input type="hidden" name="javax.faces.ViewState" value="VS:1" />
     <input type="hidden" name="javax.faces.ClientWindow" value="CW:9" />
-    <li><span id="formMenu2:a:0">P&aacute;gina de inicio</span></li>
-    <li><span id="formMenu2:a:1">Notificaciones de Fiscalizaci&oacute;n</span></li>
-    <li><span id="formMenu2:a:2">Notificaciones de Cobranza</span></li>
+    <li><a href="#" id="formMenu2:a:0" onclick="mojarra.ab(this,event,'action','@this','@all');return false">
+    <span>P&aacute;gina de inicio</span></a></li>
+    <li><a href="#" id="formMenu2:a:1" onclick="mojarra.ab(this,event,'action','@this','@all');return false">
+    <span>Notificaciones de Fiscalizaci&oacute;n</span></a>
+    <span id="formMenu2:a:9">7</span></li>
+    <li><a href="#" id="formMenu2:a:2" onclick="mojarra.ab(this,event,'action','@this','@all');return false">
+    <span>Notificaciones de Cobranza</span></a></li>
     </form>
     """
 
@@ -518,50 +524,48 @@ class AbrirBandejaSunafilTest(unittest.TestCase):
     def test_abre_la_bandeja_con_viewstate_y_boton(self):
         sesion = mock.Mock()
         sesion.get.return_value = ("url", self.INICIO)
-        sesion.post.return_value = ("url", "<html>bandeja</html>")
+        sesion.post_ajax.return_value = ("url", "<html>bandeja</html>")
 
         html = puente.abrir_bandeja_sunafil(sesion, "Notificaciones de Cobranza")
 
         self.assertEqual(html, "<html>bandeja</html>")
-        destino, datos = sesion.post.call_args[0]
+        destino, datos = sesion.post_ajax.call_args[0]
         self.assertTrue(destino.endswith("/si.inbox/Inicio/Empleador"))
         self.assertEqual(datos["javax.faces.ViewState"], "VS:1")
-        self.assertEqual(datos["formMenu2:a:2"], "formMenu2:a:2")
-        self.assertEqual(datos["formMenu2"], "formMenu2")
+        self.assertEqual(datos["javax.faces.source"], "formMenu2:a:2")
 
     def test_envia_todos_los_ocultos_no_solo_el_viewstate(self):
         """JSF puede exigir ClientWindow; el navegador manda el form entero."""
         sesion = mock.Mock()
         sesion.get.return_value = ("url", self.INICIO)
-        sesion.post.return_value = ("url", "<html/>")
+        sesion.post_ajax.return_value = ("url", "<html/>")
 
         puente.abrir_bandeja_sunafil(sesion)
 
-        datos = sesion.post.call_args[0][1]
+        datos = sesion.post_ajax.call_args[0][1]
         self.assertEqual(datos["javax.faces.ClientWindow"], "CW:9")
 
-    def test_la_variante_parcial_usa_post_ajax(self):
+    def test_usa_el_enlace_y_no_el_contador_de_al_lado(self):
+        """Cada opción tiene dos ids; el que dispara la acción es el enlace."""
         sesion = mock.Mock()
         sesion.get.return_value = ("url", self.INICIO)
         sesion.post_ajax.return_value = ("url", "<html/>")
 
-        puente.abrir_bandeja_sunafil(sesion, parcial=True)
+        puente.abrir_bandeja_sunafil(sesion)
 
-        sesion.post_ajax.assert_called_once()
-        sesion.post.assert_not_called()
         datos = sesion.post_ajax.call_args[0][1]
         self.assertEqual(datos["javax.faces.source"], "formMenu2:a:1")
-        self.assertEqual(datos["javax.faces.partial.execute"], "formMenu2:a:1")
+        self.assertNotIn("formMenu2:a:9", datos)
 
     def test_por_defecto_abre_la_bandeja_de_fiscalizacion(self):
         sesion = mock.Mock()
         sesion.get.return_value = ("url", self.INICIO)
-        sesion.post.return_value = ("url", "<html/>")
+        sesion.post_ajax.return_value = ("url", "<html/>")
 
         puente.abrir_bandeja_sunafil(sesion)
 
-        datos = sesion.post.call_args[0][1]
-        self.assertIn("formMenu2:a:1", datos)
+        datos = sesion.post_ajax.call_args[0][1]
+        self.assertEqual(datos["javax.faces.source"], "formMenu2:a:1")
 
 
 class PostAjaxTest(unittest.TestCase):
@@ -623,17 +627,16 @@ class ParametrosDelMenuTest(unittest.TestCase):
     """
 
     def test_lee_formulario_y_parametros_del_onclick(self):
-        formulario, parametros = puente._parametros_del_menu(
-            self.HTML, "Notificaciones de Fiscalización"
-        )
+        elemento = puente._elemento_pulsable(self.HTML, "Notificaciones de Fiscalización")
 
+        self.assertIsNotNone(elemento)
+        _, formulario, parametros, es_ajax = puente._accion_del_menu(elemento)
         self.assertEqual(formulario, "formMenu2")
-        self.assertEqual(parametros["formMenu2:a:1"], "formMenu2:a:1")
         self.assertEqual(parametros["param_uuid"], "abc-123")
+        self.assertFalse(es_ajax)
 
     def test_sin_onclick_devuelve_nada(self):
-        self.assertEqual(puente._parametros_del_menu("<a><span>X</span></a>", "X"),
-                         (None, None))
+        self.assertEqual(puente._elemento_pulsable("<a><span>X</span></a>", "Y"), None)
 
     def test_abrir_bandeja_envia_los_parametros_del_onclick(self):
         sesion = mock.Mock()
