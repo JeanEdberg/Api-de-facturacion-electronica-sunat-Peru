@@ -478,6 +478,27 @@ class DescargaTest(unittest.TestCase):
         self.assertEqual(accion["tipo"], "url")
         self.assertIn("uuid=ABC", accion["destino"])
 
+    def test_lee_primefaces_ab_con_claves_sin_comillas(self):
+        """PrimeFaces escribe {s:'...',f:'...'}: sin comillas en la clave."""
+        html = self._html(
+            "<a onclick=\"PrimeFaces.ab({s:'formactosAdministrativos:dtAlertas:0:j_idt105'"
+            ",f:'formactosAdministrativos'});return false\">PDF</a>"
+        )
+        accion = puente.extraer_acciones_previas(html)[0]["descarga"]
+
+        self.assertEqual(accion["tipo"], "ajax")
+        self.assertEqual(accion["destino"], "formactosAdministrativos")
+        self.assertEqual(accion["parametros"]["s"], "formactosAdministrativos:dtAlertas:0:j_idt105")
+
+    def test_un_tooltip_solo_no_es_un_enlace_de_descarga(self):
+        """El detalle real mostraba solo el tooltip de PrimeFaces."""
+        html = self._html(
+            "<span onmouseover=\"$(function () { $('#formactos:dtAlertas:0:j_idt105')"
+            ".tooltip({'delay':{show:0,hide:0}}) });\">Ver</span>"
+        )
+        fila = puente.extraer_acciones_previas(html)[0]
+        self.assertNotIn("descarga", fila)
+
     def test_sin_enlace_no_inventa_una_descarga(self):
         html = self._html("<span>Ver</span>")
         fila = puente.extraer_acciones_previas(html)[0]

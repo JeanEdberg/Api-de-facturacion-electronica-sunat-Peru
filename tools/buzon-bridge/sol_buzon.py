@@ -287,6 +287,32 @@ class Sesion:
         except (urllib.error.URLError, OSError) as e:
             raise SolError("No se pudo descargar el documento.", detalle=str(e))
 
+    def post_ajax_crudo(self, url, datos):
+        """POST AJAX de JSF que devuelve bytes y cabeceras.
+
+        Un `PrimeFaces.ab` puede responder un archivo directamente o un XML de
+        actualización parcial; hay que poder distinguirlos, así que no se
+        decodifica como texto.
+        """
+        datos = dict(datos)
+        datos["javax.faces.partial.ajax"] = "true"
+        peticion = urllib.request.Request(
+            url, data=urllib.parse.urlencode(datos).encode(), method="POST"
+        )
+        peticion.add_header(
+            "Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"
+        )
+        peticion.add_header("Faces-Request", "partial/ajax")
+        peticion.add_header("X-Requested-With", "XMLHttpRequest")
+        peticion.add_header("Referer", url)
+        try:
+            with self.opener.open(peticion, timeout=self.timeout) as r:
+                return r.geturl(), dict(r.headers), r.read()
+        except urllib.error.HTTPError as e:
+            return e.geturl(), dict(e.headers), e.read()
+        except (urllib.error.URLError, OSError) as e:
+            raise SolError("No se pudo descargar el documento.", detalle=str(e))
+
     def get_crudo(self, url):
         """GET que devuelve bytes y cabeceras (documentos enlazados por href)."""
         try:
@@ -1015,50 +1041,78 @@ def _celdas(fila):
 
 
 def _descarga_de_fila(fila):
-    """Acción JSF que descarga el documento de una fila, si la hay.
+    """Acción que descarga el documento de una fila, si la hay.
 
-    La casilla dibuja la columna «Ver Documento» como un enlace con `onclick`
-    (`mojarra.jsfcljs(...)`) o un `<a href>` directo. El texto de la celda se
-    pierde al quitar las etiquetas, así que hay que leerlas antes.
+    La casilla dibuja la columna «Ver Documento» de varias formas según la
+    pantalla: un `onclick` con `mojarra.jsfcljs`, un `onclick` con
+    `PrimeFaces.ab`, un `<a href>` al archivo, o un `<img>` dentro de un enlace.
+    Quitar las etiquetas de la celda borra el enlace, así que se leen antes.
 
-    Devuelve `{"tipo": "jsf"|"url", "destino": ..., "parametros": {...}}` o
-    `None`. Se devuelve la acción, no el PDF: descargarlo exige la sesión, y
-    esa se queda en el puente.
+    Devuelve `{"tipo": "jsf"|"ajax"|"url", ...}` o `None`. Se devuelve la
+    acción, no el PDF: descargarlo exige la sesión, y esa no sale del puente.
     """
     for celda in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S):
-        for onclick in re.findall(r"onclick\s*=\s*\"([^\"]+)\"", celda, re.I):
-            llamada = _llamada_jsf(onclick)
-            if llamada:
-                return llamada
-        for href in re.findall(r"<a[^>]+href\s*=\s*\"([^\"]+)\"", celda, re.I):
+        for onclick in re.findall(r"onclick\s*=\s*\"([^\"]*)\"", celda, re.I):
+            accion = _accion_de_onclick(onclick)
+            if accion:
+                return accion
+        for href in re.findall(r"href\s*=\s*\"([^\"]+)\"", celda, re.I):
             if href.startswith("#") or href.lower().startswith("javascript:"):
                 continue
-            if re.search(r"\.pdf|\.zip|descarg|documento|archivo", href, re.I):
+            if re.search(r"\.pdf|\.zip|\.docx?|descarg|documento|archivo|uuid", href, re.I):
                 return {"tipo": "url", "destino": unescape(href), "parametros": {}}
     return None
 
 
-def _llamada_jsf(onclick):
-    """Extrae formulario y parámetros de un `mojarra.jsfcljs(form, params, ...)`.
+def _accion_de_onclick(onclick):
+    """Traduce un `onclick` de la casilla a una acción de descarga.
 
-    El primer argumento no siempre es un nombre: la casilla lo escribe como
-    `document.getElementById('formAcciones')`. Se acepta cualquier expresión y
-    se busca el id dentro, porque comparar solo con nombres fallaba en silencio.
+    Se reconocen las dos formas que usa el sistema: el POST de JSF clásico
+    (`mojarra.jsfcljs`) y el parcial de PrimeFaces (`PrimeFaces.ab`), que
+    necesita cabeceras de AJAX distintas.
     """
-    m = re.search(r"jsfcljs\s*\(\s*(.+?)\s*,\s*\{(.*?)\}\s*,", onclick, re.S)
-    if not m:
+    if not onclick:
         return None
-    argumento = m.group(1).strip()
-    por_id = re.search(r"getElementById\s*\(\s*['\"]([^'\"]+)['\"]", argumento)
-    formulario = por_id.group(1) if por_id else argumento
-    parametros = {}
-    for par in re.findall(r"'([^']+)'\s*:\s*'([^']*)'", m.group(2)):
-        parametros[par[0]] = par[1]
-    for par in re.findall(r'\"([^\"]+)\"\s*:\s*\"([^\"]*)\"', m.group(2)):
-        parametros[par[0]] = par[1]
-    if not parametros:
-        return None
-    return {"tipo": "jsf", "destino": formulario, "parametros": parametros}
+
+    jsf = re.search(r"jsfcljs\s*\(\s*(.+?)\s*,\s*\{(.*?)\}\s*,", onclick, re.S)
+    if jsf:
+        argumento = jsf.group(1).strip()
+        por_id = re.search(r"getElementById\s*\(\s*['\"]([^'\"]+)['\"]", argumento)
+        parametros = _pares_js(jsf.group(2))
+        if parametros:
+            return {
+                "tipo": "jsf",
+                "destino": por_id.group(1) if por_id else argumento,
+                "parametros": parametros,
+            }
+
+    ab = re.search(r"PrimeFaces\.ab\s*\(\s*\{(.*?)\}\s*\)", onclick, re.S)
+    if ab:
+        opciones = _pares_js(ab.group(1))
+        if opciones:
+            # `s` es la fuente (el componente pulsado) y `f` el formulario; con
+            # esos dos y el ViewState, PrimeFaces ejecuta la acción.
+            return {
+                "tipo": "ajax",
+                "destino": opciones.get("f") or opciones.get("s") or "",
+                "parametros": opciones,
+            }
+
+    return None
+
+
+def _pares_js(texto):
+    """Pares clave/valor de un objeto JS literal.
+
+    La clave puede ir entrecomillada (`'param_uuid':'x'`, lo que escribe
+    `jsfcljs`) o desnuda (`s:'x'`, lo que escribe `PrimeFaces.ab`). Exigir
+    comillas en la clave hacía que PrimeFaces no se reconociera nunca.
+    """
+    pares = {}
+    patron = r"""(?:['"]([^'"]+)['"]|([A-Za-z_$][\w$]*))\s*:\s*['"]([^'"]*)['"]"""
+    for entrecomillada, desnuda, valor in re.findall(patron, texto):
+        pares[entrecomillada or desnuda] = valor
+    return pares
 
 
 def _sin_acentos(texto):
@@ -1408,6 +1462,24 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice):
     if accion["tipo"] == "url":
         destino = urllib.parse.urljoin(URL_CASILLA_SUNAFIL, accion["destino"])
         _, cabeceras, contenido = sesion.get_crudo(destino)
+    elif accion["tipo"] == "ajax":
+        # PrimeFaces manda `s` (componente pulsado) y `f` (formulario). Sin las
+        # cabeceras de AJAX el servidor restaura la vista y devuelve la página.
+        datos = _campos_ocultos(html, accion["destino"])
+        fuente = accion["parametros"].get("s") or accion["parametros"].get("u") or ""
+        datos.update(
+            {
+                "javax.faces.source": fuente,
+                "javax.faces.partial.execute": fuente or "@this",
+                "javax.faces.partial.render": accion["parametros"].get("u") or "@all",
+            }
+        )
+        datos.update(
+            {k: v for k, v in accion["parametros"].items() if k not in ("s", "f", "p", "u")}
+        )
+        _, cabeceras, contenido = sesion.post_ajax_crudo(
+            f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador", datos
+        )
     else:
         datos = _campos_ocultos(html, accion["destino"])
         datos.update(accion["parametros"])
