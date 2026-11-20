@@ -91,10 +91,31 @@ automatizado deja de funcionar. Por eso el puente hace **un solo intento** por
 petición y no reintenta nunca. Si la clave es incorrecta, hay que corregirla;
 insistir solo bloquea la cuenta.
 
+## Cómo se lee el buzón
+
+El buzón no es un enlace estático: el menú lo abre por JavaScript en un iframe.
+La ruta real es el visor de notificaciones:
+
+1. `GET MenuInternet.htm?action=buzon&s=<subdominio>` redirige al visor
+   `https://ww1.sunat.gob.pe/ol-ti-itvisornoti/visor/master`. El subdominio sale
+   de `https://e-menu.sunat.gob.pe/a/dominios.json` (campo `sdm`). Sin `&s=` el
+   menú responde "Error en la invocación".
+2. El HTML del visor no trae datos: la lista se pide por AJAX a
+   `GET /ol-ti-itvisornoti/visor/listNotiMenPag` con la cabecera
+   `X-Ruc: <RUC>` y los parámetros `tipoMsj`, `codCarpeta`, `codEtiqueta`,
+   `page`, `des_asunto`, `codMensaje`, `tipoOrden`.
+   - `tipoMsj=1` notificaciones, `tipoMsj=2` mensajes.
+   - Responde `{"total":<páginas>,"records":<registros>,"rows":[...]}`.
+     Ojo: `total` es el número de páginas, no de registros.
+
+`leer_buzon()` recorre ambas categorías y normaliza cada fila a
+`{entidad, codigo, asunto, fecha, tipo, remitente, adjuntos, leido, urgente,
+detalle}`. La fecha se convierte a `yyyy-mm-dd` porque la columna
+`notificaciones.fecha` es de tipo `DATE`.
+
 ## Estado
 
-Autenticación verificada contra SUNAT: el rechazo de credenciales inválidas se
-detecta correctamente. La lectura del buzón (`buscar_buzon`) localiza el enlace
-del buzón en el menú y tolera tanto JSON como tablas HTML, pero **no se ha
-podido probar con credenciales válidas**. Si SUNAT cambia el menú, ajusta
-`PISTAS_BUZON`.
+Autenticación y lectura verificadas contra SUNAT con credenciales reales: el
+puente devuelve las notificaciones y mensajes del buzón (probado con 51
+elementos). Si SUNAT cambia el visor, el punto a revisar es `URL_VISOR` y la
+ruta de `listNotiMenPag`.

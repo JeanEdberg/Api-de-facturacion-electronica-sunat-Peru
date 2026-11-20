@@ -36,7 +36,17 @@ El Menú SOL ya NO acepta un POST directo a `j_security_check` con
        j_password=<clave>, captcha=, originalUrl=<...>, lang=es-PE, state=<...>
    - Credenciales buenas -> redirige a `AutenticaMenuInternet.htm`
    - Credenciales malas  -> redirige a `/oauth2/error?...`
-4. Con la sesión abierta se localiza el enlace del buzón en el menú.
+4. GET  `MenuInternet.htm?action=buzon&s=<subdominio>` -> 302 al visor
+       `ww1.sunat.gob.pe/ol-ti-itvisornoti/visor/master?hc=...`.
+   - `subdominio` sale de `a/dominios.json` (`{"items":[{"ctx":"default","sdm":"ww1"}]}`).
+   - Sin `&s=` el menú responde "Error en la invocación".
+5. Los datos NO vienen en ese HTML: el visor los pide por AJAX a
+       GET `/ol-ti-itvisornoti/visor/listNotiMenPag`
+       con cabecera `X-Ruc: <RUC>` y query
+       tipoMsj, codCarpeta, codEtiqueta, page, des_asunto, codMensaje, tipoOrden.
+   - `tipoMsj=1` notificaciones, `tipoMsj=2` mensajes.
+   - Responde `{"total":N,"records":M,"rows":[...]}`.
+   - `/consultarAlertas` responde `{"listaAlertas":[...]}`.
 
 `state` y `originalUrl` no vienen en el HTML del formulario: hay que sacarlos
 de la query del paso 2. Por eso el POST directo a `j_security_check` del host
@@ -55,6 +65,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -70,8 +81,10 @@ PUERTO = int(os.environ.get("BUZON_BRIDGE_PORT", "12002"))
 HOST = os.environ.get("BUZON_BRIDGE_HOST", "0.0.0.0")
 TOKEN = os.environ.get("BUZON_BRIDGE_TOKEN", "")
 
-# Textos del menú que apuntan al buzón electrónico.
-PISTAS_BUZON = ("buzon", "buzón", "notificacion", "notificación", "mensaje")
+# El buzón vive en el visor de notificaciones, no en el menú. El menú solo
+# redirige a él cuando se le pasa el subdominio (`&s=`).
+URL_MENU = "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm"
+URL_VISOR = "https://{sdm}.sunat.gob.pe/ol-ti-itvisornoti/visor"
 
 
 class SolError(Exception):
@@ -201,97 +214,133 @@ def entrar_al_menu(ruc, usuario, clave):
     return sesion, url_final
 
 
-def _enlaces(html, base):
-    """Devuelve (texto, url absoluta) de los enlaces del menú."""
-    for href, texto in re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html, re.S | re.I):
-        limpio = re.sub(r"<[^>]+>", " ", texto)
-        limpio = re.sub(r"\s+", " ", unescape(limpio)).strip()
-        yield limpio, urllib.parse.urljoin(base, unescape(href))
-
-
-def buscar_buzon(sesion, html_menu, url_menu):
-    """Localiza en el menú la página del buzón y la descarga."""
-    candidatos = [
-        (texto, url)
-        for texto, url in _enlaces(html_menu, url_menu)
-        if any(pista in (texto + " " + url).lower() for pista in PISTAS_BUZON)
-    ]
-    if not candidatos:
-        raise SolError(
-            "La sesión SOL se abrió, pero no se encontró el enlace del buzón en "
-            "el menú. SUNAT cambió el menú y hay que ajustar `PISTAS_BUZON`.",
-            detalle=html_menu[:3000],
-        )
-
-    # Se prueban los primeros enlaces por si el menú repite la palabra.
-    errores = []
-    for _, url in candidatos[:5]:
-        _, cuerpo = sesion.get(url)
-        items = _interpretar(cuerpo)
-        if items is not None:
-            return items
-        errores.append(url)
-    raise SolError(
-        "Se encontró el buzón pero SUNAT no devolvió datos legibles. "
-        "Puede que el buzón use otra ruta o que la sesión haya caducado.",
-        detalle="Enlaces probados: " + ", ".join(errores),
-    )
-
-
-def _interpretar(crudo):
-    """Intenta leer una lista de notificaciones; None si no lo parece."""
-    texto = crudo.strip()
-    if not texto:
-        return None
+def _subdominio(sesion):
+    """Devuelve el subdominio del visor (`ww1`), que el menú exige en `&s=`."""
     try:
-        datos = json.loads(texto)
-    except json.JSONDecodeError:
-        # Algunos buzones vienen dentro de una tabla HTML.
-        return _desde_tabla(crudo)
-    items = datos.get("data") if isinstance(datos, dict) else datos
-    return items if isinstance(items, list) else None
+        _, crudo = sesion.get("https://e-menu.sunat.gob.pe/a/dominios.json")
+        items = json.loads(crudo).get("items") or []
+        for item in items:
+            if item.get("ctx") == "default" and item.get("sdm"):
+                return item["sdm"]
+        if items and items[0].get("sdm"):
+            return items[0]["sdm"]
+    except (SolError, json.JSONDecodeError, AttributeError):
+        pass
+    return "ww1"
 
 
-def _desde_tabla(html):
-    """Extrae filas de una tabla HTML como lista de diccionarios."""
-    filas = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I)
-    if len(filas) < 2:
-        return None
-
-    def celdas(fila):
-        return [
-            re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", c))).strip()
-            for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", fila, re.S | re.I)
-        ]
-
-    encabezado = [c.lower() for c in celdas(filas[0])]
-    if not any("asunto" in c or "documento" in c or "descrip" in c for c in encabezado):
-        return None
-
-    items = []
-    for fila in filas[1:]:
-        valores = celdas(fila)
-        if not valores or not any(valores):
-            continue
-        registro = dict(zip(encabezado, valores))
-        items.append(
-            {
-                "codigo": registro.get("documento") or registro.get("nro") or "",
-                "asunto": registro.get("asunto") or registro.get("descripcion") or "",
-                "fecha": registro.get("fecha") or "",
-                "detalle": json.dumps(registro, ensure_ascii=False),
-            }
+def abrir_visor(sesion, ruc):
+    """Entra al visor del buzón y devuelve (url_visor, base_ajax)."""
+    subdominio = _subdominio(sesion)
+    url, cuerpo = sesion.get(URL_MENU + "?action=buzon&s=" + subdominio)
+    if "/ol-ti-itvisornoti/visor" not in url:
+        raise SolError(
+            "La sesión SOL se abrió, pero SUNAT no llevó al visor del buzón. "
+            "Puede que el buzón esté en mantenimiento.",
+            detalle=cuerpo[:2000],
         )
-    return items
+    return url, URL_VISOR.format(sdm=subdominio)
+
+
+def _pedir_ajax(sesion, base, ruta, params, url_referer, ruc):
+    """GET a un endpoint AJAX del visor, con las cabeceras que exige SUNAT."""
+    url = f"{base}{ruta}?{urllib.parse.urlencode(params)}"
+    peticion = urllib.request.Request(url, method="GET")
+    peticion.add_header("X-Ruc", ruc)
+    peticion.add_header("X-Requested-With", "XMLHttpRequest")
+    peticion.add_header("Accept", "application/json, text/javascript, */*; q=0.01")
+    peticion.add_header("Referer", url_referer)
+    try:
+        with sesion.opener.open(peticion, timeout=60) as r:
+            return r.read().decode("utf-8", "ignore")
+    except urllib.error.HTTPError as e:
+        return e.read().decode("utf-8", "ignore")
+    except (urllib.error.URLError, OSError) as e:
+        raise SolError(
+            "SUNAT no respondió al pedir la lista del buzón.", detalle=str(e)
+        )
+
+
+def _leer_paginas(sesion, base, url_visor, ruc, tipo_msj):
+    """Recorre las páginas del buzón y devuelve las filas ya normalizadas."""
+    filas = []
+    pagina = 1
+    while True:
+        crudo = _pedir_ajax(
+            sesion,
+            base,
+            "/listNotiMenPag",
+            {
+                "tipoMsj": tipo_msj,
+                "codCarpeta": "",
+                "codEtiqueta": "",
+                "page": pagina,
+                "des_asunto": "",
+                "codMensaje": "",
+                "tipoOrden": "",
+            },
+            url_visor,
+            ruc,
+        )
+        try:
+            datos = json.loads(crudo)
+        except json.JSONDecodeError:
+            raise SolError(
+                "SUNAT no devolvió la lista del buzón en el formato esperado. "
+                "Puede que la sesión haya caducado.",
+                detalle=crudo[:2000],
+            )
+
+        lote = datos.get("rows") or []
+        filas.extend(lote)
+        # SUNAT llama `total` al número de páginas y `records` al de registros.
+        registros = datos.get("records") or 0
+        if not lote or len(filas) >= registros:
+            break
+        pagina += 1
+        if pagina > 50:  # tope de seguridad
+            break
+    return filas
+
+
+def _fecha(valor):
+    """Convierte `dd/mm/yyyy[ hh:mm:ss]` de SUNAT a `yyyy-mm-dd` (columna DATE)."""
+    if not valor:
+        return None
+    texto = str(valor).strip()
+    for formato in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(texto, formato).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return texto[:10] if len(texto) >= 10 else texto
+
+
+def _normalizar(fila, entidad, tipo):
+    """Traduce una fila del visor al formato que espera el backend."""
+    return {
+        "entidad": entidad,
+        "codigo": str(fila.get("codMensaje") or ""),
+        "asunto": fila.get("desAsunto") or "",
+        "fecha": _fecha(fila.get("fecPublica") or fila.get("fecEnvio")),
+        "tipo": tipo,
+        "remitente": fila.get("codUsremisor") or "",
+        "adjuntos": fila.get("cantidadArchAdj") or 0,
+        "leido": fila.get("indEstado") == 1,
+        "urgente": fila.get("indUrg") == 1,
+        "detalle": json.dumps(fila, ensure_ascii=False),
+    }
 
 
 def leer_buzon(ruc, usuario, clave, entidad):
-    """Devuelve las notificaciones del buzón como lista de diccionarios."""
-    sesion, url_final = entrar_al_menu(ruc, usuario, clave)
-    _, html_menu = sesion.get(url_final)
-    items = buscar_buzon(sesion, html_menu, url_final)
-    for item in items:
-        item.setdefault("entidad", entidad)
+    """Devuelve las notificaciones y mensajes del buzón de SUNAT."""
+    sesion, _ = entrar_al_menu(ruc, usuario, clave)
+    url_visor, base = abrir_visor(sesion, ruc)
+
+    items = []
+    for tipo_msj, etiqueta in (("1", "notificacion"), ("2", "mensaje")):
+        for fila in _leer_paginas(sesion, base, url_visor, ruc, tipo_msj):
+            items.append(_normalizar(fila, entidad, etiqueta))
     return items
 
 
