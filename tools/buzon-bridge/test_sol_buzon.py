@@ -7,6 +7,7 @@ replican lo que se observó en el sistema real (302 con `code`, 302 a
 
 import io
 import json
+import os
 import unittest
 from unittest import mock
 
@@ -173,6 +174,35 @@ class EnrutadoTest(unittest.TestCase):
         codigo, cuerpo = manejador._responder.call_args[0]
         self.assertEqual(codigo, 502)
         self.assertIn("SUNARP", cuerpo["error"])
+
+
+class GrabadorTest(unittest.TestCase):
+    """El grabador no debe consumir el cuerpo que necesita el flujo."""
+
+    def test_guarda_la_respuesta_y_la_deja_legible_para_el_llamador(self):
+        import tempfile
+
+        import capturar_sunafil as captura
+
+        carpeta = tempfile.mkdtemp()
+        grabador = captura.Grabador(carpeta)
+
+        respuesta = mock.Mock()
+        respuesta.geturl.return_value = "https://ejemplo.gob.pe/x"
+        respuesta.status = 200
+        respuesta.code = 200
+        respuesta.headers = {"Content-Type": "application/json; charset=utf-8"}
+        respuesta.read.return_value = b'{"rows": [1, 2]}'
+
+        devuelta = grabador.http_response(mock.Mock(), respuesta)
+
+        self.assertIs(devuelta, respuesta)
+        self.assertEqual(len(grabador.lineas), 1)
+        archivos = os.listdir(carpeta)
+        self.assertEqual(len(archivos), 1)
+        self.assertTrue(archivos[0].endswith(".json"))
+        with open(os.path.join(carpeta, archivos[0]), "rb") as f:
+            self.assertEqual(f.read(), b'{"rows": [1, 2]}')
 
 
 if __name__ == "__main__":

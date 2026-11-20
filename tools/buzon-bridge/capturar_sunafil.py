@@ -45,7 +45,9 @@ class Grabador(urllib.request.BaseHandler):
         estado = getattr(response, "status", None) or response.code
         tipo = response.headers.get("Content-Type", "")
         cuerpo = response.read()
-        response.read = lambda *a, **k: b""  # ya consumido
+        # El cuerpo ya se consumió: se devuelve tal cual a quien lo pida después,
+        # para no dejar vacío al código que sigue el flujo.
+        response.read = lambda *a, **k: cuerpo
 
         nombre = f"{self.n:02d}_{re.sub(r'[^a-zA-Z0-9]+', '-', url)[-70:]}"
         extension = ".json" if "json" in tipo else ".html"
