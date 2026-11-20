@@ -119,3 +119,60 @@ Autenticación y lectura verificadas contra SUNAT con credenciales reales: el
 puente devuelve las notificaciones y mensajes del buzón (probado con 51
 elementos). Si SUNAT cambia el visor, el punto a revisar es `URL_VISOR` y la
 ruta de `listNotiMenPag`.
+
+## La casilla de SUNAFIL es otro sistema
+
+El buzón de SUNAFIL **no** se lee por el visor de SUNAT. Su casilla
+(`https://casillaelectronica.sunafil.gob.pe/si.inbox/`) es una aplicación JSF
+sobre Tomcat —de ahí el `;jsessionid=` en las URLs— con un flujo de entrada
+distinto, aunque use la misma Clave SOL de la empresa.
+
+La pantalla `/si.inbox/Login/Empresa` no tiene login propio: redirige al SSO de
+SUNAT con el `client_id` de SUNAFIL
+(`b6474e23-8a3b-4153-b301-dafcc9646250`). El SSO devuelve un `code` OAuth2 que
+la casilla canjea. El puente reproduce ese paso:
+
+1. `GET /v1/clientessol/<client_id>/oauth2/login?originalUrl=<casilla>/si.inbox/Login/Empresa&state=s`
+   devuelve el formulario `j_security_check` y su `state`.
+2. `POST /v1/clientessol/<client_id>/oauth2/j_security_check` con `tipo=2`
+   (modo RUC), `custom_ruc`, `j_username`, `j_password`, `originalUrl` y
+   `state`. Con credenciales válidas responde `302` al `originalUrl` con un
+   `code`; con credenciales rechazadas, `302` a `/oauth2/error`.
+
+**Un detalle importante:** el SSO cuenta los fallos por IP/sesión y a los 3
+activa un captcha que el puente no puede resolver. Por eso
+`autenticar_sunafil()` hace **un solo intento** y no reintenta. Si aparece el
+captcha, hay que esperar a que caduque antes de volver a probar.
+
+`/salud` informa `sunat_alcanzable` y `sunafil_alcanzable` por separado: son
+hosts distintos y el de SUNAFIL suele estar inaccesible desde fuera de Perú.
+
+### Estado de la lectura de SUNAFIL
+
+La autenticación está **verificada contra el SSO real**: una clave incorrecta
+devuelve el mensaje de credenciales rechazadas y una correcta obtendría el
+`code`. La **lectura de la bandeja no está implementada**: falta capturar con
+una sesión real la petición con la que `si.inbox` lista las notificaciones.
+Mientras tanto `leer_buzon_sunafil()` falla con un mensaje explícito en vez de
+devolver una lista vacía, porque un buzón vacío y uno inaccesible no son lo
+mismo. Para cerrarlo hace falta ejecutar el puente desde una máquina con salida
+a internet en Perú y capturar esa petición.
+
+### Cómo desbloquear la lectura desde un PC en Perú
+
+`capturar_sunafil.py` hace el login y guarda todo el tráfico de la casilla en
+una carpeta, para poder ver con qué petición `si.inbox` lista las
+notificaciones:
+
+```bash
+python3 capturar_sunafil.py 20614684772 MODDATOS
+```
+
+Pide la Clave SOL con `getpass` (no se muestra ni queda en el historial) y crea
+`captura-sunafil-<fecha>/` con un `index.txt` y un archivo por respuesta. Si la
+bandeja se carga por AJAX, la lista aparece como un `.json` en esa carpeta.
+
+La carpeta **contiene cookies de sesión**: son credenciales. Compártela solo con
+quien implemente el lector y bórrala al terminar. Si el script no ve la lista,
+repite la captura con las Herramientas de Desarrollo del navegador en la
+pestaña Red mientras abres la bandeja.

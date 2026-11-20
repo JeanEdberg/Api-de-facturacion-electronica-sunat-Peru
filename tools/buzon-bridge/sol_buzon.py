@@ -61,6 +61,7 @@ import http.cookiejar
 import json
 import os
 import re
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -86,6 +87,18 @@ TOKEN = os.environ.get("BUZON_BRIDGE_TOKEN", "")
 URL_MENU = "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm"
 URL_VISOR = "https://{sdm}.sunat.gob.pe/ol-ti-itvisornoti/visor"
 
+# Casilla electrónica de SUNAFIL. Es otro sistema aunque comparta la Clave SOL:
+# su pantalla de entrada no tiene login propio y delega en el SSO de SUNAT con
+# este `client_id`. El SSO devuelve un `code` OAuth2 y la casilla lo canjea.
+URL_SSO = "https://api-seguridad.sunat.gob.pe"
+SUNAFIL_CLIENT_ID = "b6474e23-8a3b-4153-b301-dafcc9646250"
+URL_CASILLA_SUNAFIL = "https://casillaelectronica.sunafil.gob.pe"
+RUTA_LOGIN_SUNAFIL = "/si.inbox/Login/Empresa"
+
+# El host de la casilla suele estar inaccesible desde fuera de Perú y no corta
+# la conexión: deja las peticiones colgadas hasta el timeout. Se sondea corto.
+TIEMPO_SONDA = 5
+
 
 class SolError(Exception):
     """Fallo al hablar con SUNAT.
@@ -103,7 +116,8 @@ class SolError(Exception):
 class Sesion:
     """Sesión HTTP con cookies contra el Menú SOL."""
 
-    def __init__(self):
+    def __init__(self, timeout=60):
+        self.timeout = timeout
         self.cookies = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.cookies)
@@ -116,7 +130,7 @@ class Sesion:
 
     def get(self, url):
         try:
-            with self.opener.open(url, timeout=60) as r:
+            with self.opener.open(url, timeout=self.timeout) as r:
                 return r.geturl(), r.read().decode("utf-8", "ignore")
         except urllib.error.HTTPError as e:
             return url, e.read().decode("utf-8", "ignore")
@@ -139,7 +153,7 @@ class Sesion:
         peticion.add_header("Content-Type", "application/x-www-form-urlencoded")
         peticion.add_header("Referer", url)
         try:
-            with self.opener.open(peticion, timeout=60) as r:
+            with self.opener.open(peticion, timeout=self.timeout) as r:
                 return r.geturl(), r.read().decode("utf-8", "ignore")
         except urllib.error.HTTPError as e:
             return e.geturl(), e.read().decode("utf-8", "ignore")
@@ -251,7 +265,7 @@ def _pedir_ajax(sesion, base, ruta, params, url_referer, ruc):
     peticion.add_header("Accept", "application/json, text/javascript, */*; q=0.01")
     peticion.add_header("Referer", url_referer)
     try:
-        with sesion.opener.open(peticion, timeout=60) as r:
+        with sesion.opener.open(peticion, timeout=sesion.timeout) as r:
             return r.read().decode("utf-8", "ignore")
     except urllib.error.HTTPError as e:
         return e.read().decode("utf-8", "ignore")
@@ -344,6 +358,151 @@ def leer_buzon(ruc, usuario, clave, entidad):
     return items
 
 
+class _SinRedireccion(urllib.request.HTTPRedirectHandler):
+    """No sigue el 302: el destino final apunta al host de la casilla SUNAFIL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _leer_redireccion(sesion, url, datos):
+    """POST que devuelve `(status, location)` sin seguir la redirección."""
+    cuerpo = urllib.parse.urlencode(datos).encode()
+    peticion = urllib.request.Request(url, data=cuerpo, method="POST")
+    peticion.add_header("Content-Type", "application/x-www-form-urlencoded")
+    peticion.add_header("Referer", url.rsplit("/", 1)[0] + "/login")
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(sesion.cookies), _SinRedireccion()
+    )
+    opener.addheaders = sesion.opener.addheaders
+    try:
+        with opener.open(peticion, timeout=sesion.timeout) as r:
+            return r.status, r.headers.get("Location", "")
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Location", "")
+    except urllib.error.URLError as e:
+        raise SolError(
+            "No se pudo conectar con el SSO de SUNAT para la casilla de SUNAFIL.",
+            detalle=str(e.reason),
+        )
+    except OSError as e:
+        raise SolError("El SSO de SUNAT cortó la conexión.", detalle=str(e))
+
+
+def autenticar_sunafil(ruc, usuario, clave, sesion=None):
+    """Autentica en la casilla de SUNAFIL con la misma Clave SOL de SUNAT.
+
+    SUNAFIL no tiene login propio: `/si.inbox/Login/Empresa` redirige al SSO de
+    SUNAT con el `client_id` de SUNAFIL, que devuelve un `code` OAuth2. El
+    formulario del SSO (`j_security_check`) se envía con `tipo=2`, que es el
+    modo RUC, y los campos `custom_ruc`, `j_username` y `j_password`.
+
+    Devuelve `(code, state)`. No se sigue la redirección final porque apunta al
+    host de la casilla, que puede no ser alcanzable desde este servidor.
+
+    `sesion` permite continuar el flujo con las mismas cookies (lo usa el
+    script de captura para entrar a la casilla después del login).
+    """
+    sesion = sesion or Sesion()
+    url = (
+        f"{URL_SSO}/v1/clientessol/{SUNAFIL_CLIENT_ID}/oauth2/login"
+        f"?originalUrl={URL_CASILLA_SUNAFIL}{RUTA_LOGIN_SUNAFIL}&state=s"
+    )
+    try:
+        url_login, _ = sesion.get(url)
+    except SolError as e:
+        raise SolError(
+            "No se pudo iniciar sesión en la casilla de SUNAFIL: el SSO de "
+            "SUNAT no respondió.",
+            detalle=e.detalle,
+        )
+
+    parametros = urllib.parse.parse_qs(urllib.parse.urlparse(url_login).query)
+    state = (parametros.get("state") or [""])[0]
+    original = (parametros.get("originalUrl") or [""])[0]
+    if not state or not original:
+        raise SolError(
+            "El SSO de SUNAT no entregó el `state` de la casilla de SUNAFIL. "
+            "El flujo de autenticación cambió y hay que actualizar el puente.",
+            detalle=url_login,
+        )
+
+    # Un único intento: cada fallo suma al contador del SSO y a los 3 activa
+    # el captcha, que el puente no puede resolver.
+    _, destino = _leer_redireccion(
+        sesion,
+        f"{URL_SSO}/v1/clientessol/{SUNAFIL_CLIENT_ID}/oauth2/j_security_check",
+        {
+            "tipo": "2",
+            "dni": "",
+            "custom_ruc": ruc,
+            "j_username": usuario,
+            "j_password": clave,
+            "captcha": "",
+            "originalUrl": original,
+            "lang": "es-PE",
+            "state": state,
+        },
+    )
+
+    if "/oauth2/error" in destino:
+        raise SolError(
+            f"SUNAFIL rechazó las credenciales SOL del RUC {ruc}. Revisa el "
+            "usuario SOL y la Clave SOL en el Menú SOL. Ojo: son las mismas "
+            "credenciales de SUNAT, no unas aparte.",
+            detalle=destino,
+        )
+
+    devueltos = urllib.parse.parse_qs(urllib.parse.urlparse(destino).query)
+    code = (devueltos.get("code") or [""])[0]
+    if not code:
+        raise SolError(
+            "El SSO de SUNAT aceptó la sesión pero no devolvió el código de "
+            "acceso de la casilla de SUNAFIL.",
+            detalle=destino,
+        )
+    return code, (devueltos.get("state") or [state])[0]
+
+
+def _sondear_sunafil():
+    """Comprueba si el host de la casilla de SUNAFIL acepta conexión TCP."""
+    partes = urllib.parse.urlparse(URL_CASILLA_SUNAFIL)
+    try:
+        with socket.create_connection(
+            (partes.hostname, partes.port or 443), timeout=TIEMPO_SONDA
+        ):
+            return True
+    except OSError:
+        return False
+
+
+def leer_buzon_sunafil(ruc, usuario, clave):
+    """Lee las notificaciones de la casilla electrónica de SUNAFIL.
+
+    La autenticación está verificada contra el SSO real, pero la bandeja
+    todavía no se puede leer: la casilla es una aplicación JSF (`si.inbox`,
+    con `;jsessionid=`) y su host no responde desde fuera de Perú. Se avisa en
+    vez de devolver una lista vacía: un buzón vacío y uno inaccesible no son
+    lo mismo.
+    """
+    code, state = autenticar_sunafil(ruc, usuario, clave)
+
+    if not _sondear_sunafil():
+        raise SolError(
+            "La Clave SOL es válida, pero el servidor de la casilla de SUNAFIL "
+            "no responde. Comprueba desde un navegador en Perú: si tampoco "
+            "carga, el servicio está caído del lado de SUNAFIL.",
+            detalle=f"Sin conexión TCP a {URL_CASILLA_SUNAFIL}",
+        )
+
+    raise SolError(
+        "La autenticación con SUNAFIL funciona y la casilla responde, pero la "
+        "lectura de la bandeja todavía no está implementada: falta capturar la "
+        "petición de la lista con una sesión real.",
+        detalle=f"code={code[:12]}… state={state}",
+    )
+
+
 class Manejador(BaseHTTPRequestHandler):
     def _responder(self, codigo, cuerpo):
         carga = json.dumps(cuerpo, ensure_ascii=False).encode()
@@ -368,6 +527,7 @@ class Manejador(BaseHTTPRequestHandler):
                 {
                     "puente": "ok",
                     "sunat_alcanzable": alcanzable,
+                    "sunafil_alcanzable": _sondear_sunafil(),
                     "detalle": "" if alcanzable else portada[:500],
                 },
             )
@@ -407,16 +567,19 @@ class Manejador(BaseHTTPRequestHandler):
             return
 
         try:
-            # Este puente solo sabe leer el buzón de SUNAT. Si se pide otra
-            # entidad hay que decirlo, en vez de devolver datos de SUNAT con
-            # la etiqueta cambiada.
-            if entidad != "SUNAT":
+            # Cada entidad es un sistema distinto: SUNAT se lee por el visor
+            # del Menú SOL y SUNAFIL por su casilla. Nunca devolver datos de
+            # uno con la etiqueta del otro.
+            if entidad == "SUNAT":
+                datos = leer_buzon(ruc, usuario, clave, entidad)
+            elif entidad == "SUNAFIL":
+                datos = leer_buzon_sunafil(ruc, usuario, clave)
+            else:
                 raise SolError(
-                    f"El puente no lee el buzón de {entidad}. La casilla "
-                    "electrónica de SUNAFIL es otro sistema: configura su "
-                    "endpoint en la pestaña Accesos SOL."
+                    f"El puente no lee el buzón de {entidad}. Solo soporta "
+                    "SUNAT y SUNAFIL."
                 )
-            self._responder(200, {"data": leer_buzon(ruc, usuario, clave, entidad)})
+            self._responder(200, {"data": datos})
         except SolError as e:
             self._responder(502, {"error": e.mensaje, "detalle": e.detalle})
 
