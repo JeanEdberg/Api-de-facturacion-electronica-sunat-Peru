@@ -30,6 +30,19 @@ Login de los usuarios seed: `POST /api/auth/login` (**sin** `v1`), token en
   la cuenta del cliente. Usar un RUC ficticio con dígito verificador válido,
   por ejemplo `20123456786`.
 - `GET /salud` del puente comprueba el acceso a SUNAT sin credenciales.
+- **El buzón no es un enlace del menú.** `#aOpcionBuzon` tiene `href="#"` y lo
+  abre por JavaScript en un iframe. La ruta real es
+  `MenuInternet.htm?action=buzon&s=<subdominio>` → visor
+  `ww1.sunat.gob.pe/ol-ti-itvisornoti/visor/master`. El subdominio sale de
+  `a/dominios.json` (`sdm`); sin `&s=` el menú responde "Error en la invocación".
+- **Los datos del buzón se piden por AJAX**, no vienen en el HTML:
+  `GET /ol-ti-itvisornoti/visor/listNotiMenPag` con `X-Ruc: <RUC>` y
+  `tipoMsj` (1 = notificaciones, 2 = mensajes). Raspar tablas HTML del visor
+  no devuelve nada y produce el 502 "no devolvió datos legibles".
+- **En la respuesta de `listNotiMenPag`, `total` son páginas y `records` son
+  registros.** Paginar con `total` corta la lista en la primera página.
+- **`notificaciones.fecha` es DATE.** Hay que convertir las fechas de SUNAT
+  (`dd/mm/yyyy hh:mm:ss`) a `yyyy-mm-dd` antes de insertar.
 
 ## Secretos
 
