@@ -440,6 +440,151 @@ class ArranqueTest(unittest.TestCase):
         servidor.assert_not_called()
 
 
+class DescargaTest(unittest.TestCase):
+    """La columna «Ver Documento» se pierde al quitar las etiquetas."""
+
+    def _html(self, celda_documento):
+        fila = (
+            "<tr><td>CARTAS INDUCTIVAS GENERAL</td>"
+            "<td>0000122241 - 2026 - SUNAFIL/DPPR/SDPA</td>"
+            "<td>23/10/2026</td><td>29/10/2026</td><td>20</td>"
+            "<td>26/11/2026</td>"
+            f"<td>{celda_documento}</td></tr>"
+        )
+        return (
+            "<table><thead><tr><th>Tipo de Requerimiento</th><th>Registro</th>"
+            "<th>Fecha de Depósito</th><th>Fecha de Acuse</th><th>Plazo</th>"
+            "<th>Fecha Límite</th><th>Ver Documento</th></tr></thead>"
+            f"<tbody>{fila}</tbody></table>"
+        )
+
+    def test_lee_el_onclick_con_getelementbyid(self):
+        """La casilla escribe getElementById('form'), no el nombre a secas."""
+        html = self._html(
+            "<a href=\"#\" onclick=\"mojarra.jsfcljs(document.getElementById("
+            "'formAcciones'),{'formAcciones:0:j_idt44':'formAcciones:0:j_idt44',"
+            "'param_uuid':'ABC123'},'');return false\">PDF</a>"
+        )
+        accion = puente.extraer_acciones_previas(html)[0]["descarga"]
+
+        self.assertEqual(accion["tipo"], "jsf")
+        self.assertEqual(accion["destino"], "formAcciones")
+        self.assertEqual(accion["parametros"]["param_uuid"], "ABC123")
+
+    def test_lee_un_enlace_directo_al_pdf(self):
+        html = self._html('<a href="/si.inbox/Documento/descargar?uuid=ABC">PDF</a>')
+        accion = puente.extraer_acciones_previas(html)[0]["descarga"]
+
+        self.assertEqual(accion["tipo"], "url")
+        self.assertIn("uuid=ABC", accion["destino"])
+
+    def test_sin_enlace_no_inventa_una_descarga(self):
+        html = self._html("<span>Ver</span>")
+        fila = puente.extraer_acciones_previas(html)[0]
+        self.assertNotIn("descarga", fila)
+
+    def test_un_onclick_que_no_es_jsf_no_cuenta(self):
+        html = self._html('<a href="#" onclick="alert(1)">PDF</a>')
+        fila = puente.extraer_acciones_previas(html)[0]
+        self.assertNotIn("descarga", fila)
+
+
+class DescargarDocumentoTest(unittest.TestCase):
+    def setUp(self):
+        self.sesion = mock.Mock()
+        self.sesion.get = mock.Mock(return_value=("url", "<html></html>"))
+        parche = mock.patch.object(puente, "Sesion", return_value=self.sesion)
+        parche.start()
+        self.addCleanup(parche.stop)
+
+    def _acciones(self, con_enlace=True):
+        celda = (
+            "<a href=\"#\" onclick=\"mojarra.jsfcljs(document.getElementById("
+            "'formAcciones'),{'param_uuid':'ABC'},'');return false\">PDF</a>"
+            if con_enlace
+            else "<span>Ver</span>"
+        )
+        return (
+            "<table><thead><tr><th>Tipo de Requerimiento</th><th>Registro</th>"
+            "<th>Plazo</th><th>Fecha Límite</th><th>Ver Documento</th></tr></thead>"
+            "<tbody><tr><td>CARTA</td><td>0000122241 - 2026</td><td>20</td>"
+            f"<td>26/11/2026</td><td>{celda}</td></tr></tbody></table>"
+        )
+
+    def test_devuelve_el_pdf_y_su_nombre(self):
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value=self._acciones()
+        ), mock.patch.object(
+            puente, "_campos_ocultos", return_value={"javax.faces.ViewState": "V"}
+        ):
+            self.sesion.post_crudo = mock.Mock(
+                return_value=(
+                    "url",
+                    {
+                        "Content-Type": "application/pdf",
+                        "Content-Disposition": 'attachment; filename="carta.pdf"',
+                    },
+                    b"%PDF-1.4 datos",
+                )
+            )
+            nombre, contenido = puente.descargar_documento(
+                "20614684772", "MODDATOS", "clave", "Acciones Previas", 0
+            )
+
+        self.assertEqual(nombre, "carta.pdf")
+        self.assertTrue(contenido.startswith(b"%PDF"))
+
+    def test_si_sunafil_devuelve_html_no_lo_hace_pasar_por_pdf(self):
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value=self._acciones()
+        ), mock.patch.object(
+            puente, "_campos_ocultos", return_value={}
+        ):
+            self.sesion.post_crudo = mock.Mock(
+                return_value=(
+                    "url",
+                    {"Content-Type": "text/html"},
+                    b"<!DOCTYPE html><html>Login</html>",
+                )
+            )
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.descargar_documento(
+                    "20614684772", "MODDATOS", "clave", "Acciones Previas", 0
+                )
+
+        self.assertIn("página en vez del documento", ctx.exception.mensaje)
+
+    def test_una_fila_sin_enlace_lo_dice(self):
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value=self._acciones(False)
+        ):
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.descargar_documento(
+                    "20614684772", "MODDATOS", "clave", "Acciones Previas", 0
+                )
+
+        self.assertIn("no trae enlace", ctx.exception.mensaje)
+
+    def test_un_indice_fuera_de_rango_no_revienta(self):
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value=self._acciones()
+        ):
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.descargar_documento(
+                    "20614684772", "MODDATOS", "clave", "Acciones Previas", 99
+                )
+
+        self.assertIn("se pidió la número 100", ctx.exception.mensaje)
+
+
 class DiasHabilesTest(unittest.TestCase):
     def test_cuenta_habiles_y_no_naturales(self):
         """Del viernes 20 al jueves 26 hay 6 naturales pero solo 4 hábiles."""

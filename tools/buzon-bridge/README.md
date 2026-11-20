@@ -44,6 +44,32 @@ El campo `detalle` conserva el texto original de SUNAT para diagnóstico. El
 backend no lo muestra en la interfaz: guarda `error` como mensaje y descarta el
 HTML.
 
+### Descargar el documento de una fila
+
+`POST /documento` con el mismo JSON y dos campos más:
+
+```json
+{ "ruc": "...", "usuario": "...", "clave": "...",
+  "bandeja": "acciones_previas", "indice": 0 }
+```
+
+`bandeja` es `notificaciones` o `acciones_previas`; `indice` empieza en 0 y es
+el mismo orden que devuelve `POST /buzon`. Responde el archivo con su
+`Content-Type` real y `Content-Disposition`, o un error JSON si esa fila no
+trae documento.
+
+La sesión no se guarda entre peticiones: cada descarga repite el login. Es más
+lento, pero no deja credenciales ni cookies vivas en el puente.
+
+Las filas que traen enlace de documento lo indican en `descarga`:
+
+```json
+{ "registro": "...", "descarga": { "tipo": "jsf", "destino": "formAcciones",
+  "parametros": { "param_uuid": "..." } } }
+```
+
+Si una fila no trae `descarga`, SUNAFIL no ofrece el documento por esa vía.
+
 ## Configuración en el ERP
 
 1. Guarda la fuente en el panel del buzón: endpoint `https://<host>:12002/buzon`,

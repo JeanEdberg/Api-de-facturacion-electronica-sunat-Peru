@@ -84,6 +84,7 @@ NAVEGADOR = (
 
 PUERTO = int(os.environ.get("BUZON_BRIDGE_PORT", "12002"))
 RUTA_BUZON = "/buzon"
+RUTA_DOCUMENTO = "/documento"
 
 # Se calcula al importar, así que cambiar el código sin reiniciar el proceso
 # deja una huella distinta en cada respuesta y el error se ve al instante.
@@ -266,6 +267,35 @@ class Sesion:
         peticion.add_header("Content-Type", "application/x-www-form-urlencoded")
         peticion.add_header("Referer", url)
         return self._enviar(peticion)
+
+    def post_crudo(self, url, datos):
+        """POST de formulario que devuelve bytes y cabeceras.
+
+        Para descargar un documento no sirve decodificar como texto: un PDF
+        se corrompe al pasar por `decode("utf-8", "ignore")`.
+        """
+        peticion = urllib.request.Request(
+            url, data=urllib.parse.urlencode(datos).encode(), method="POST"
+        )
+        peticion.add_header("Content-Type", "application/x-www-form-urlencoded")
+        peticion.add_header("Referer", url)
+        try:
+            with self.opener.open(peticion, timeout=self.timeout) as r:
+                return r.geturl(), dict(r.headers), r.read()
+        except urllib.error.HTTPError as e:
+            return e.geturl(), dict(e.headers), e.read()
+        except (urllib.error.URLError, OSError) as e:
+            raise SolError("No se pudo descargar el documento.", detalle=str(e))
+
+    def get_crudo(self, url):
+        """GET que devuelve bytes y cabeceras (documentos enlazados por href)."""
+        try:
+            with self.opener.open(url, timeout=self.timeout) as r:
+                return r.geturl(), dict(r.headers), r.read()
+        except urllib.error.HTTPError as e:
+            return e.geturl(), dict(e.headers), e.read()
+        except (urllib.error.URLError, OSError) as e:
+            raise SolError("No se pudo descargar el documento.", detalle=str(e))
 
     def post_ajax(self, url, datos):
         """POST de JSF parcial: responde XML con solo los trozos actualizados.
@@ -984,6 +1014,53 @@ def _celdas(fila):
     return [_texto_celda(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S)]
 
 
+def _descarga_de_fila(fila):
+    """Acción JSF que descarga el documento de una fila, si la hay.
+
+    La casilla dibuja la columna «Ver Documento» como un enlace con `onclick`
+    (`mojarra.jsfcljs(...)`) o un `<a href>` directo. El texto de la celda se
+    pierde al quitar las etiquetas, así que hay que leerlas antes.
+
+    Devuelve `{"tipo": "jsf"|"url", "destino": ..., "parametros": {...}}` o
+    `None`. Se devuelve la acción, no el PDF: descargarlo exige la sesión, y
+    esa se queda en el puente.
+    """
+    for celda in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S):
+        for onclick in re.findall(r"onclick\s*=\s*\"([^\"]+)\"", celda, re.I):
+            llamada = _llamada_jsf(onclick)
+            if llamada:
+                return llamada
+        for href in re.findall(r"<a[^>]+href\s*=\s*\"([^\"]+)\"", celda, re.I):
+            if href.startswith("#") or href.lower().startswith("javascript:"):
+                continue
+            if re.search(r"\.pdf|\.zip|descarg|documento|archivo", href, re.I):
+                return {"tipo": "url", "destino": unescape(href), "parametros": {}}
+    return None
+
+
+def _llamada_jsf(onclick):
+    """Extrae formulario y parámetros de un `mojarra.jsfcljs(form, params, ...)`.
+
+    El primer argumento no siempre es un nombre: la casilla lo escribe como
+    `document.getElementById('formAcciones')`. Se acepta cualquier expresión y
+    se busca el id dentro, porque comparar solo con nombres fallaba en silencio.
+    """
+    m = re.search(r"jsfcljs\s*\(\s*(.+?)\s*,\s*\{(.*?)\}\s*,", onclick, re.S)
+    if not m:
+        return None
+    argumento = m.group(1).strip()
+    por_id = re.search(r"getElementById\s*\(\s*['\"]([^'\"]+)['\"]", argumento)
+    formulario = por_id.group(1) if por_id else argumento
+    parametros = {}
+    for par in re.findall(r"'([^']+)'\s*:\s*'([^']*)'", m.group(2)):
+        parametros[par[0]] = par[1]
+    for par in re.findall(r'\"([^\"]+)\"\s*:\s*\"([^\"]*)\"', m.group(2)):
+        parametros[par[0]] = par[1]
+    if not parametros:
+        return None
+    return {"tipo": "jsf", "destino": formulario, "parametros": parametros}
+
+
 def _sin_acentos(texto):
     reemplazos = str.maketrans("áéíóúÁÉÍÓÚñÑ", "aeiouAEIOUnN")
     return texto.translate(reemplazos).lower()
@@ -1108,6 +1185,9 @@ def extraer_acciones_previas(html_casilla):
             efectos = re.search(r"Efectos del Dep[oó]sito:?\s*([0-9/]+)", deposito)
             datos["fecha_efectos"] = efectos.group(1) if efectos else ""
             datos["fecha_deposito"] = deposito.split("Efectos")[0].strip()
+            descarga = _descarga_de_fila(fila)
+            if descarga:
+                datos["descarga"] = descarga
             datos["dias_restantes"] = _dias_hasta(datos.get("fecha_limite", ""))
             datos["dias_habiles_restantes"] = _habiles_hasta(
                 datos.get("fecha_limite", "")
@@ -1286,6 +1366,75 @@ def _guardar(nombre, html):
     sys.stderr.write(f"[sol-bridge] guardado {ruta} ({len(html)} B)\n")
 
 
+def descargar_documento(ruc, usuario, clave, etiqueta, indice):
+    """Descarga el documento de una fila de una bandeja de SUNAFIL.
+
+    Repite el camino completo porque la sesión no se guarda entre peticiones:
+    entrar, canjear el `code`, abrir la bandeja, localizar la fila y pulsar su
+    enlace. Devolver el PDF exige la sesión autenticada, y esa no sale nunca
+    del puente.
+
+    Devuelve `(nombre_sugerido, bytes)`. Lanza `SolError` si esa fila no tiene
+    documento o si SUNAFIL responde algo que no es un archivo.
+    """
+    sesion = Sesion()
+    code, state = autenticar_sunafil(ruc, usuario, clave, sesion=sesion)
+    entrada = (
+        f"{URL_CASILLA_SUNAFIL}{RUTA_REDIRECT_SUNAFIL}"
+        f"?state={urllib.parse.quote(state)}&code={urllib.parse.quote(code)}"
+    )
+    sesion.get(entrada)
+
+    # Se abre la bandeja con la misma función que lista, para que el índice de
+    # fila sea el mismo que vio el usuario en la respuesta JSON.
+    html = abrir_bandeja_sunafil(sesion, etiqueta)
+    filas = [
+        f for f in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S) if "<td" in f
+    ]
+    if indice < 0 or indice >= len(filas):
+        raise SolError(
+            f"La bandeja «{etiqueta}» tiene {len(filas)} filas y se pidió la "
+            f"número {indice + 1}."
+        )
+
+    accion = _descarga_de_fila(filas[indice])
+    if not accion:
+        raise SolError(
+            "Esa fila no trae enlace de documento. Puede que SUNAFIL lo muestre "
+            "solo dentro de la casilla o que la columna haya cambiado.",
+            detalle=re.sub(r"\s+", " ", _texto_celda(filas[indice]))[:300],
+        )
+
+    if accion["tipo"] == "url":
+        destino = urllib.parse.urljoin(URL_CASILLA_SUNAFIL, accion["destino"])
+        _, cabeceras, contenido = sesion.get_crudo(destino)
+    else:
+        datos = _campos_ocultos(html, accion["destino"])
+        datos.update(accion["parametros"])
+        _, cabeceras, contenido = sesion.post_crudo(
+            f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador", datos
+        )
+
+    tipo = (cabeceras.get("Content-Type") or "").lower()
+    if "html" in tipo or contenido[:15].lstrip().startswith(b"<!DOCTYPE"):
+        raise SolError(
+            "SUNAFIL devolvió una página en vez del documento. Suele ser la "
+            "sesión caducada o un enlace que ya no existe.",
+            detalle=_resumen_pagina(contenido.decode("utf-8", "ignore")),
+        )
+
+    nombre = _nombre_de_cabecera(cabeceras.get("Content-Disposition", ""))
+    return nombre or "documento.pdf", contenido
+
+
+def _nombre_de_cabecera(valor):
+    """Nombre de archivo de un `Content-Disposition`, si lo trae."""
+    m = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", valor or "", re.I)
+    if not m:
+        return ""
+    return os.path.basename(unescape(m.group(1).strip().strip('"')))
+
+
 def _resumen_pagina(html):
     """Texto de la página, corto, para saber qué devolvió SUNAFIL."""
     texto = re.sub(r"<script.*?</script>", " ", html, flags=re.S | re.I)
@@ -1360,12 +1509,15 @@ class Manejador(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 (nombre impuesto por BaseHTTPRequestHandler)
         # Sin esto, un POST a cualquier ruta entraba y fallaba por el JSON, y
         # el usuario veía «cuerpo inválido» cuando el problema era la URL.
-        if not self.path.startswith(RUTA_BUZON):
+        if not self.path.startswith((RUTA_BUZON, RUTA_DOCUMENTO)):
             self._responder(
                 404,
                 {
                     "error": f"Ruta no encontrada: {self.path}",
-                    "detalle": f"El puente lee buzones en POST {RUTA_BUZON}.",
+                    "detalle": (
+                        f"El puente lee buzones en POST {RUTA_BUZON} y descarga "
+                        f"documentos en POST {RUTA_DOCUMENTO}."
+                    ),
                 },
             )
             return
@@ -1410,6 +1562,10 @@ class Manejador(BaseHTTPRequestHandler):
             )
             return
 
+        if self.path.startswith(RUTA_DOCUMENTO):
+            self._descargar(cuerpo, ruc, usuario, clave)
+            return
+
         try:
             # Cada entidad es un sistema distinto: SUNAT se lee por el visor
             # del Menú SOL y SUNAFIL por su casilla. Nunca devolver datos de
@@ -1426,6 +1582,39 @@ class Manejador(BaseHTTPRequestHandler):
             self._responder(200, {"data": datos})
         except SolError as e:
             self._responder(502, {"error": e.mensaje, "detalle": e.detalle})
+
+    def _descargar(self, cuerpo, ruc, usuario, clave):
+        """Devuelve el documento como binario, no como JSON."""
+        bandeja = str(cuerpo.get("bandeja") or "acciones_previas")
+        etiquetas = dict(BANDEJAS_SUNAFIL)
+        if bandeja not in etiquetas:
+            self._responder(
+                400,
+                {"error": f"Bandeja desconocida: {bandeja}", "detalle": list(etiquetas)},
+            )
+            return
+        try:
+            indice = int(cuerpo.get("indice", 0))
+        except (TypeError, ValueError):
+            self._responder(400, {"error": "El índice de fila tiene que ser un número."})
+            return
+
+        try:
+            nombre, contenido = descargar_documento(
+                ruc, usuario, clave, etiquetas[bandeja], indice
+            )
+        except SolError as e:
+            self._responder(502, {"error": e.mensaje, "detalle": e.detalle})
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{nombre}"'
+        )
+        self.send_header("Content-Length", str(len(contenido)))
+        self.end_headers()
+        self.wfile.write(contenido)
 
     def log_message(self, formato, *args):
         # Sin volcado de cabeceras ni de credenciales en el log.
