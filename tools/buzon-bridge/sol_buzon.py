@@ -1548,42 +1548,57 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
 
     # La carta abre un diálogo (`formDescargaDoc`) y dentro está el botón
     # «Descargar» que hace la descarga real. Es un segundo POST.
+    # El diálogo puede venir en la respuesta o estar ya en la página de la
+    # bandeja (PrimeFaces lo deja montado y sólo lo muestra).
+    origen_dialogo = contenido
     boton_dialogo = _boton_descarga_en_dialogo(contenido)
+    if not boton_dialogo:
+        origen_dialogo = html.encode("utf-8")
+        boton_dialogo = _boton_descarga_en_dialogo(origen_dialogo)
+
     if boton_dialogo:
         datos2 = _campos_ocultos(
-            contenido.decode("utf-8", "ignore"), boton_dialogo["formulario"]
+            origen_dialogo.decode("utf-8", "ignore"), boton_dialogo["formulario"]
         )
         datos2[boton_dialogo["boton"]] = boton_dialogo["boton"]
-        datos2.update(
-            {
-                "javax.faces.source": boton_dialogo["boton"],
-                "javax.faces.partial.execute": boton_dialogo["boton"],
-                "javax.faces.partial.render": "@all",
-            }
+        # El POST va al `action` del propio formulario, no a la URL de la
+        # bandeja: JSF necesita la vista del diálogo para ejecutar su acción.
+        url_dialogo = urllib.parse.urljoin(
+            url_bandeja, boton_dialogo["accion"] or url_bandeja
         )
-        _, cab3, contenido3 = sesion.post_ajax_crudo(url_bandeja, datos2)
+        if boton_dialogo.get("ajax"):
+            datos2.update(
+                {
+                    "javax.faces.source": boton_dialogo["boton"],
+                    "javax.faces.partial.execute": boton_dialogo["boton"],
+                    "javax.faces.partial.render": "@all",
+                }
+            )
+            _, cab3, contenido3 = sesion.post_ajax_crudo(url_dialogo, datos2)
+        else:
+            _, cab3, contenido3 = sesion.post_crudo(url_dialogo, datos2)
         if _es_pdf(contenido3):
             nombre = _nombre_de_cabecera(cab3.get("Content-Disposition", ""))
             return nombre or f"{tipo}.pdf", contenido3
         # Se conserva la respuesta del diálogo: es la que dice qué falta.
         contenido, cabeceras = contenido3, cab3
 
-    # Se guarda la respuesta cruda: es lo único que dice qué contestó SUNAFIL
-    # cuando no fue el archivo, y sin ella sólo se puede adivinar.
-    carpeta = os.environ.get("BUZON_GUARDAR")
-    if carpeta:
-        ruta = os.path.join(carpeta, f"respuesta-{tipo}.bin")
-        try:
-            with open(ruta, "wb") as f:
-                f.write(contenido)
-        except OSError:
-            ruta = ""
+    # Se guarda siempre la respuesta cruda junto al script: es lo único que
+    # dice qué contestó SUNAFIL cuando no fue el archivo, y sin ella sólo se
+    # puede adivinar. Va al directorio de trabajo, que es donde se ejecuta.
+    ruta = os.path.abspath(f"respuesta-{tipo}.html")
+    try:
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+    except OSError:
+        ruta = ""
 
     raise SolError(
         f"SUNAFIL respondió algo que no es un PDF ({len(contenido)} bytes, "
         f"{cabeceras.get('Content-Type') or 'sin tipo'}). Suele pasar con la "
         "carta, que se abre en un visor antes de descargarse."
-        + (f" Respuesta guardada en {ruta}." if carpeta else ""),
+        + (f"\n\nLa respuesta se guardó en:\n  {ruta}\n"
+           f"Analízala con:  python mirar_respuesta.py \"{os.path.basename(ruta)}\"" if ruta else ""),
         detalle=_resumen_pagina(contenido.decode("utf-8", "ignore")),
     )
 
@@ -1626,7 +1641,15 @@ def _boton_descarga_en_dialogo(contenido):
             etiqueta = _sin_acentos(_texto_celda(boton))
             if "descargar" not in etiqueta and "fa-file-pdf" not in boton:
                 continue
-            return {"formulario": formulario, "boton": unescape(nombre.group(1))}
+            accion = re.search(r"""<form[^>]*\baction\s*=\s*["']([^"']+)["']""", bloque, re.I)
+            return {
+                "formulario": formulario,
+                "boton": unescape(nombre.group(1)),
+                "accion": unescape(accion.group(1)) if accion else "",
+                # `PrimeFaces.monitorDownload` es una descarga normal: el
+                # navegador envía el formulario y recibe el archivo. No es AJAX.
+                "ajax": False,
+            }
     return None
 
 

@@ -660,6 +660,33 @@ class DescargarDocumentoTest(unittest.TestCase):
         self.assertTrue(contenido.startswith(b"%PDF"))
         self.assertIn("visor/documento", self.sesion.get_crudo.call_args[0][0])
 
+    def test_el_dialogo_se_busca_tambien_en_la_pagina_de_la_bandeja(self):
+        """PrimeFaces deja el diálogo montado: no siempre viene en la respuesta."""
+        self.sesion.post_ajax_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "text/xml"}, b"<partial-response/>")
+        )
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "_abrir_bandeja",
+            return_value=(
+                "http://casilla/vista", self._acciones(BOTON_CARTA) + DIALOGO_DESCARGA
+            ),
+        ):
+            nombre, contenido = puente.descargar_documento(
+                "20614684772", "MODDATOS", "clave", "Acciones Previas", 0, "carta"
+            )
+
+        self.assertTrue(contenido.startswith(b"%PDF"))
+        # El segundo POST va al action del diálogo, no a la vista de la bandeja.
+        self.assertEqual(
+            self.sesion.post_crudo.call_args[0][0],
+            "http://casilla/si.inbox/ActosAdministrativos/ListadoRequerimientos",
+        )
+
     def test_el_post_va_a_la_url_de_la_bandeja_no_a_la_de_inicio(self):
         """Enviarlo a /Inicio/Empleador devolvía la página de bienvenida."""
         self.sesion.post_crudo = mock.Mock(
@@ -714,6 +741,18 @@ class DialogoDescargaTest(unittest.TestCase):
             'class="btn btn-primary"', 'class="btn btn-primary" disabled="disabled"'
         )
         self.assertIsNone(puente._boton_descarga_en_dialogo(roto))
+
+    def test_devuelve_el_action_del_formulario(self):
+        """El POST debe ir a ListadoRequerimientos, no a la URL de la bandeja."""
+        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
+        self.assertEqual(
+            boton["accion"], "/si.inbox/ActosAdministrativos/ListadoRequerimientos"
+        )
+
+    def test_el_boton_del_dialogo_no_va_por_ajax(self):
+        """monitorDownload es una descarga normal: el navegador recibe el archivo."""
+        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
+        self.assertFalse(boton["ajax"])
 
     def test_una_pagina_sin_dialogo_devuelve_none(self):
         self.assertIsNone(puente._boton_descarga_en_dialogo("<html><body>x</body></html>"))
