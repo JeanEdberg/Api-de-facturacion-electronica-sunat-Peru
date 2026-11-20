@@ -758,6 +758,46 @@ class DialogoDescargaTest(unittest.TestCase):
         self.assertIsNone(puente._boton_descarga_en_dialogo("<html><body>x</body></html>"))
 
 
+class ViewStateDelDialogoTest(unittest.TestCase):
+    """El ViewState es de la vista: el diálogo no lo lleva dentro."""
+
+    def test_toma_el_viewstate_de_la_pagina_si_el_formulario_no_lo_tiene(self):
+        html = (
+            '<form id="formPrincipal">'
+            '<input type="hidden" name="javax.faces.ViewState" value="VS:PAGINA"/>'
+            "</form>"
+            '<form id="formDescargaDoc">'
+            '<input type="hidden" name="otro" value="x"/></form>'
+        )
+        campos = puente._campos_ocultos(html, "formDescargaDoc")
+
+        self.assertEqual(campos["javax.faces.ViewState"], "VS:PAGINA")
+        self.assertEqual(campos["otro"], "x")
+
+    def test_el_del_formulario_manda_sobre_el_de_la_pagina(self):
+        html = (
+            '<form id="formPrincipal">'
+            '<input type="hidden" name="javax.faces.ViewState" value="VS:VIEJO"/>'
+            "</form>"
+            '<form id="formDescargaDoc">'
+            '<input type="hidden" name="javax.faces.ViewState" value="VS:SUYO"/></form>'
+        )
+        campos = puente._campos_ocultos(html, "formDescargaDoc")
+
+        self.assertEqual(campos["javax.faces.ViewState"], "VS:SUYO")
+
+    def test_lee_el_viewstate_de_un_xml_parcial(self):
+        xml = (
+            "<partial-response><changes>"
+            '<update id="javax.faces.ViewState">VS:NUEVO</update>'
+            "</changes></partial-response>"
+        )
+        self.assertEqual(puente._viewstate_opcional(xml), "VS:NUEVO")
+
+    def test_sin_viewstate_devuelve_vacio_y_no_revienta(self):
+        self.assertEqual(puente._viewstate_opcional("<html>x</html>"), "")
+
+
 class DiasHabilesTest(unittest.TestCase):
     def test_cuenta_habiles_y_no_naturales(self):
         """Del viernes 20 al jueves 26 hay 6 naturales pero solo 4 hábiles."""

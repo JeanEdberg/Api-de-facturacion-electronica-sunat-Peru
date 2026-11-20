@@ -942,6 +942,17 @@ def _campos_ocultos(html_casilla, id_formulario):
             campos[unescape(nombre.group(1))] = (
                 unescape(valor.group(1)) if valor else ""
             )
+
+    # El `ViewState` pertenece a la vista, no al formulario: los diálogos de
+    # PrimeFaces no lo llevan dentro. Sin él JSF no ejecuta la acción y sólo
+    # re-renderiza la página, que es justo lo que devolvía SUNAFIL.
+    if "javax.faces.ViewState" not in campos:
+        global_vs = re.search(
+            r'<input[^>]*\bname="javax\.faces\.ViewState"[^>]*\bvalue="([^"]*)"',
+            html_casilla,
+        )
+        if global_vs:
+            campos["javax.faces.ViewState"] = unescape(global_vs.group(1))
     return campos
 
 
@@ -1560,6 +1571,12 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
         datos2 = _campos_ocultos(
             origen_dialogo.decode("utf-8", "ignore"), boton_dialogo["formulario"]
         )
+        # El ViewState más reciente es el de la última respuesta. Mandar el de
+        # la página anterior hace que JSF rechace la acción y devuelva la
+        # página otra vez, que es exactamente lo que estaba pasando.
+        vs_reciente = _viewstate_opcional(contenido) or _viewstate_opcional(origen_dialogo)
+        if vs_reciente:
+            datos2["javax.faces.ViewState"] = vs_reciente
         datos2[boton_dialogo["boton"]] = boton_dialogo["boton"]
         # El POST va al `action` del propio formulario, no a la URL de la
         # bandeja: JSF necesita la vista del diálogo para ejecutar su acción.
@@ -1611,6 +1628,30 @@ def _es_pdf(contenido):
 # Marcas de la vista del documento. Si la respuesta las trae, la descarga es
 # otra petición y hay que sacar su dirección de aquí.
 MARCAS_VISOR = ("visor", "embed", "iframe", "pdfjs", "reportviewer", "jasper")
+
+
+def _viewstate_opcional(texto):
+    """`javax.faces.ViewState` de un HTML o de un XML de actualización parcial.
+
+    Devuelve "" si no lo encuentra: aquí se usa para refrescar el estado, y no
+    tenerlo no es un error. La versión estricta es `_viewstate`.
+    """
+    if isinstance(texto, bytes):
+        texto = texto.decode("utf-8", "ignore")
+    m = re.search(
+        r"""<input[^>]*\bname\s*=\s*["']javax\.faces\.ViewState["'][^>]*\bvalue\s*=\s*["']([^"']*)["']""",
+        texto,
+        re.I,
+    )
+    if m:
+        return unescape(m.group(1))
+    # En un `<partial-response>` viene como <update id="javax.faces.ViewState">.
+    m = re.search(
+        r"""<update[^>]*\bid\s*=\s*["'][^"']*ViewState["'][^>]*>(.*?)</update>""",
+        texto,
+        re.S | re.I,
+    )
+    return unescape(m.group(1).strip()) if m else ""
 
 
 def _boton_descarga_en_dialogo(contenido):
