@@ -440,3 +440,46 @@ test('probar la fuente con el puente caído no filtra detalles de cURL', functio
     expect($mensaje)->not->toContain('libcurl');
     expect($mensaje)->toContain('puente');
 });
+
+test('la clave SOL se guarda cifrada y el modelo la devuelve en claro', function () {
+    $this->company->clave_sol = 'clave-real-123';
+    $this->company->save();
+
+    $crudo = DB::table('companies')->where('id', $this->company->id)->value('clave_sol');
+
+    expect($crudo)->not->toBe('clave-real-123');
+    expect($crudo)->toStartWith('eyJ'); // payload del cifrador de Laravel
+    expect($this->company->fresh()->clave_sol)->toBe('clave-real-123');
+});
+
+test('la clave SOL no aparece al serializar la empresa', function () {
+    $this->company->clave_sol = 'clave-real-123';
+    $this->company->save();
+
+    expect($this->company->fresh()->toArray())->not->toHaveKey('clave_sol');
+});
+
+test('el comando sunat:clave-sol guarda la clave de la empresa', function () {
+    $this->artisan('sunat:clave-sol', ['ruc' => $this->company->ruc, '--usuario' => 'MODDATOS'])
+        ->expectsQuestion('Clave SOL (no se muestra al escribir)', 'clave-desde-comando')
+        ->assertSuccessful();
+
+    $empresa = $this->company->fresh();
+    expect($empresa->clave_sol)->toBe('clave-desde-comando');
+    expect($empresa->usuario_sol)->toBe('MODDATOS');
+});
+
+test('el comando sunat:clave-sol falla con un RUC desconocido', function () {
+    $this->artisan('sunat:clave-sol', ['ruc' => '20999999999'])
+        ->assertFailed();
+});
+
+test('el comando sunat:clave-sol no guarda una clave vacía', function () {
+    $original = $this->company->clave_sol;
+
+    $this->artisan('sunat:clave-sol', ['ruc' => $this->company->ruc, '--usuario' => 'MODDATOS'])
+        ->expectsQuestion('Clave SOL (no se muestra al escribir)', '')
+        ->assertFailed();
+
+    expect($this->company->fresh()->clave_sol)->toBe($original);
+});

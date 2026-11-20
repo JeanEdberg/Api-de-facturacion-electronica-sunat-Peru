@@ -47,6 +47,7 @@ class Company extends Model
     ];
 
     protected $casts = [
+        'clave_sol' => 'encrypted',
         'buzon_token' => 'encrypted',
         'modo_produccion' => 'boolean',
         'contribuyente_amazonia' => 'boolean',
