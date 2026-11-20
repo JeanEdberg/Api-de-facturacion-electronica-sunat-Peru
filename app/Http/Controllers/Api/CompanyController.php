@@ -30,6 +30,10 @@ class CompanyController extends Controller
                     'id', 'ruc', 'razon_social', 'nombre_comercial', 
                     'direccion', 'distrito', 'provincia', 'departamento',
                     'email', 'telefono', 'modo_produccion', 'activo',
+                    // Endpoints y usuario SOL se exponen para que el panel del
+                    // buzón precargue la fuente; `clave_sol` y `buzon_token`
+                    // quedan fuera a propósito (el modelo también los oculta).
+                    'buzon_sunat_endpoint', 'buzon_sunafil_endpoint', 'usuario_sol',
                     'created_at', 'updated_at'
                 ])
                 ->get();

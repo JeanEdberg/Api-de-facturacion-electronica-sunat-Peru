@@ -29,3 +29,7 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Puente del buzón (Python)
+__pycache__/
+*.pyc

@@ -25,6 +25,9 @@ class Company extends Model
         'web',
         'usuario_sol',
         'clave_sol',
+        'buzon_sunat_endpoint',
+        'buzon_sunafil_endpoint',
+        'buzon_token',
         'certificado_pem',
         'certificado_password',
         'gre_client_id_beta',
@@ -44,6 +47,7 @@ class Company extends Model
     ];
 
     protected $casts = [
+        'buzon_token' => 'encrypted',
         'modo_produccion' => 'boolean',
         'contribuyente_amazonia' => 'boolean',
         'activo' => 'boolean',
@@ -51,6 +55,7 @@ class Company extends Model
 
     protected $hidden = [
         'clave_sol',
+        'buzon_token',
         'certificado_pem',
         'certificado_password',
         'gre_client_secret_beta',

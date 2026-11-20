@@ -46,6 +46,8 @@ class NotificacionController extends Controller
             $query->where('estado', $data['estado']);
         }
 
+        $company = Company::findOrFail($companyId);
+
         $paginador = $query->orderByDesc('fecha')
             ->orderByDesc('id')
             ->paginate((int) ($data['per_page'] ?? 15));
@@ -55,6 +57,7 @@ class NotificacionController extends Controller
             'data' => $paginador,
             'resumen' => $this->service->resumen($companyId, $data['entidad'] ?? null),
             'alertas' => $this->alertas($companyId),
+            'fuente' => $this->service->estadoFuente($company),
             'message' => 'Notificaciones obtenidas correctamente',
         ]);
     }
@@ -143,6 +146,73 @@ class NotificacionController extends Controller
                 ? "Sincronizado: {$resultado['importadas']} notificación(es)."
                 : 'Buzón sincronizado: sin notificaciones nuevas.',
         ]);
+    }
+
+    /**
+     * Guarda la fuente del buzón de la empresa (endpoints, token y credenciales
+     * SOL). Los secretos vacíos conservan el valor actual, para que guardar solo
+     * un endpoint no borre la Clave SOL ya configurada.
+     */
+    public function fuente(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'buzon_sunat_endpoint' => ['nullable', 'string', 'max:500'],
+            'buzon_sunafil_endpoint' => ['nullable', 'string', 'max:500'],
+            'buzon_token' => ['nullable', 'string', 'max:500'],
+            'usuario_sol' => ['nullable', 'string', 'max:100'],
+            'clave_sol' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $companyId = $this->companyId($request, $data['company_id'] ?? null);
+        $company = Company::findOrFail($companyId);
+
+        $cambios = [
+            'buzon_sunat_endpoint' => $data['buzon_sunat_endpoint'] ?? null,
+            'buzon_sunafil_endpoint' => $data['buzon_sunafil_endpoint'] ?? null,
+        ];
+
+        if (array_key_exists('usuario_sol', $data) && filled($data['usuario_sol'])) {
+            $cambios['usuario_sol'] = $data['usuario_sol'];
+        }
+
+        foreach (['buzon_token', 'clave_sol'] as $secreto) {
+            if (filled($data[$secreto] ?? null)) {
+                $cambios[$secreto] = $data[$secreto];
+            }
+        }
+
+        $company->update($cambios);
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->service->estadoFuente($company->refresh()),
+            'message' => 'Fuente del buzón guardada correctamente',
+        ]);
+    }
+
+    /**
+     * Prueba la fuente sin importar nada: el panel muestra si el endpoint, el
+     * token y la Clave SOL realmente funcionan.
+     */
+    public function probarFuente(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'entidad' => ['nullable', 'string', 'in:SUNAT,SUNAFIL'],
+        ]);
+
+        $companyId = $this->companyId($request, $data['company_id'] ?? null);
+        $company = Company::findOrFail($companyId);
+
+        $resultado = $this->service->probar($company, $data['entidad'] ?? 'SUNAT');
+
+        return response()->json([
+            'success' => $resultado['conectado'],
+            'conectado' => $resultado['conectado'],
+            'total' => $resultado['total'],
+            'message' => $resultado['message'],
+        ], $resultado['conectado'] ? 200 : 502);
     }
 
     public function adjuntar(Request $request, Notificacion $notificacion): JsonResponse

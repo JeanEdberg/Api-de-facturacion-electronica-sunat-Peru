@@ -205,6 +205,8 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [NotificacionController::class, 'index']);
         Route::post('/', [NotificacionController::class, 'store']);
         Route::post('/sincronizar', [NotificacionController::class, 'sincronizar']);
+        Route::post('/fuente', [NotificacionController::class, 'fuente']);
+        Route::post('/probar-fuente', [NotificacionController::class, 'probarFuente']);
         Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
         Route::post('/{notificacion}/adjuntos', [NotificacionController::class, 'adjuntar']);
         Route::get('/{notificacion}/adjunto', [NotificacionController::class, 'descargarAdjunto']);
