@@ -440,6 +440,26 @@ class ArranqueTest(unittest.TestCase):
         servidor.assert_not_called()
 
 
+class DiasHabilesTest(unittest.TestCase):
+    def test_cuenta_habiles_y_no_naturales(self):
+        """Del viernes 20 al jueves 26 hay 6 naturales pero solo 4 hábiles."""
+        with mock.patch.object(puente, "date") as falso:
+            falso.today.return_value = puente.datetime(2026, 11, 20).date()
+            falso.side_effect = lambda *a, **k: puente.datetime(*a, **k).date()
+            self.assertEqual(puente._dias_hasta("26/11/2026"), 6)
+            self.assertEqual(puente._habiles_hasta("26/11/2026"), 4)
+
+    def test_una_fecha_ya_pasada_da_cero_habiles(self):
+        with mock.patch.object(puente, "date") as falso:
+            falso.today.return_value = puente.datetime(2026, 11, 20).date()
+            falso.side_effect = lambda *a, **k: puente.datetime(*a, **k).date()
+            self.assertEqual(puente._habiles_hasta("19/11/2026"), 0)
+
+    def test_una_fecha_ilegible_no_inventa_un_numero(self):
+        self.assertIsNone(puente._habiles_hasta(""))
+        self.assertIsNone(puente._habiles_hasta("26-11-2026"))
+
+
 class EnrutadoTest(unittest.TestCase):
     """Ejercita `do_POST` de verdad, con los lectores simulados."""
 

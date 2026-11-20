@@ -70,7 +70,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1048,6 +1048,32 @@ def _dias_hasta(fecha):
     return (limite - date.today()).days
 
 
+def _habiles_hasta(fecha):
+    """Días hábiles que faltan, sin contar hoy.
+
+    SUNAFIL da los plazos en días hábiles, así que el número de días naturales
+    engaña: del viernes 20 al jueves 26 hay 6 naturales pero solo 4 hábiles.
+    No se descuentan feriados: sin un calendario oficial eso sería peor que no
+    hacerlo, porque daría una cifra falsa con apariencia de exacta.
+    """
+    if not fecha:
+        return None
+    try:
+        limite = datetime.strptime(fecha.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        return None
+    hoy = date.today()
+    if limite <= hoy:
+        return 0
+    dias = 0
+    cursor = hoy
+    while cursor < limite:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            dias += 1
+    return dias
+
+
 def extraer_acciones_previas(html_casilla):
     """Saca las filas de la tabla de Acciones Previas de la casilla.
 
@@ -1083,6 +1109,9 @@ def extraer_acciones_previas(html_casilla):
             datos["fecha_efectos"] = efectos.group(1) if efectos else ""
             datos["fecha_deposito"] = deposito.split("Efectos")[0].strip()
             datos["dias_restantes"] = _dias_hasta(datos.get("fecha_limite", ""))
+            datos["dias_habiles_restantes"] = _habiles_hasta(
+                datos.get("fecha_limite", "")
+            )
             acciones.append(datos)
 
         if acciones:
