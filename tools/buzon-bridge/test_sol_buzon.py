@@ -135,6 +135,43 @@ class AutenticarSunafilTest(unittest.TestCase):
         self.assertIn("código", ctx.exception.mensaje)
 
 
+class NotificacionesTest(unittest.TestCase):
+    """La bandeja de notificaciones se nombra con sus propios encabezados."""
+
+    TABLA = """
+    <table id="formNotificacion:dtNotificaciones">
+    <thead><tr><th>N&uacute;mero</th><th>Tipo</th><th>Fecha de Notificaci&oacute;n</th></tr></thead>
+    <tbody>
+    <tr><td>0000122241</td><td>CARTA INDUCTIVA</td><td>29/10/2026</td></tr>
+    <tr><td>0000122242</td><td>REQUERIMIENTO</td><td>30/10/2026</td></tr>
+    </tbody></table>
+    """
+
+    def test_lee_las_filas_con_los_nombres_de_sus_columnas(self):
+        filas = puente.extraer_notificaciones(self.TABLA)
+
+        self.assertEqual(len(filas), 2)
+        self.assertEqual(filas[0]["numero"], "0000122241")
+        self.assertEqual(filas[0]["tipo"], "CARTA INDUCTIVA")
+        self.assertEqual(filas[1]["fecha de notificacion"], "30/10/2026")
+
+    def test_una_bandeja_sin_tabla_no_inventa_filas(self):
+        self.assertEqual(puente.extraer_notificaciones("<html></html>"), [])
+
+    def test_sin_encabezados_usa_columnas_numeradas(self):
+        html = """<table id="formNotificacion:dtNotificaciones">
+        <tr><td>uno</td><td>dos</td></tr></table>"""
+
+        filas = puente.extraer_notificaciones(html)
+
+        self.assertEqual(filas[0]["columna_1"], "uno")
+        self.assertEqual(filas[0]["columna_2"], "dos")
+
+    def test_distingue_el_inicio_de_una_bandeja_abierta(self):
+        self.assertTrue(puente._es_inicio("<div id='formInicio_parque'></div>"))
+        self.assertFalse(puente._es_inicio(self.TABLA))
+
+
 class LeerBuzonSunafilTest(unittest.TestCase):
     def test_si_la_casilla_no_responde_lo_dice_en_vez_de_devolver_vacio(self):
         with mock.patch.object(
@@ -149,16 +186,39 @@ class LeerBuzonSunafilTest(unittest.TestCase):
         self.assertIn("no responde", mensaje)
         self.assertIn("Clave SOL es válida", mensaje)
 
-    def test_si_la_casilla_responde_pero_falta_la_bandeja_lo_avisa(self):
+    def test_si_la_casilla_responde_pero_devuelve_el_inicio_lo_avisa(self):
+        """Una lista vacía y una bandeja que no se abrió no son lo mismo."""
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("code", "state")
         ), mock.patch.object(
             puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value="<div id='formInicio_parque'></div>"
         ):
             with self.assertRaises(puente.SolError) as ctx:
                 puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
 
-        self.assertIn("POST", ctx.exception.mensaje)
+        self.assertIn("página de inicio", ctx.exception.mensaje)
+
+    def test_devuelve_las_dos_bandejas_cuando_la_bandeja_se_abre(self):
+        html = """
+        <table id="formNotificacion:dtNotificaciones">
+        <tr><th>N&uacute;mero</th><th>Fecha</th></tr>
+        <tr><td>0000123</td><td>23/10/2026</td></tr>
+        </table>
+        """
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("code", "state")
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ), mock.patch.object(
+            puente, "abrir_bandeja_sunafil", return_value=html
+        ):
+            datos = puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
+
+        self.assertEqual(len(datos["notificaciones"]), 1)
+        self.assertEqual(datos["notificaciones"][0]["numero"], "0000123")
+        self.assertIn("acciones_previas", datos)
 
 
 class EnrutadoTest(unittest.TestCase):

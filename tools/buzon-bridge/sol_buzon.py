@@ -929,6 +929,16 @@ def abrir_bandeja_sunafil(sesion, etiqueta="Notificaciones de Fiscalización"):
     return html
 
 
+# Marcas que solo aparecen en la página de inicio de la casilla. Si el POST
+# las devuelve es que no abrió la bandeja y hay que avisar, no dar lista vacía.
+MARCAS_INICIO = ("formInicio_parque", "image-1.jpg")
+
+
+def _es_inicio(html_casilla):
+    """True si la respuesta es la página de inicio y no una bandeja."""
+    return any(marca in html_casilla for marca in MARCAS_INICIO)
+
+
 # Claves de las columnas que interesan de la tabla de Acciones Previas.
 COLUMNAS_ACCIONES = (
     "tipo",
@@ -1061,7 +1071,7 @@ def extraer_acciones_previas(html_casilla):
                 continue
 
             deposito = datos.get("fecha_deposito", "")
-            efectos = re.search(r"Efectos del Dep[oó]sito:\s*([0-9/]+)", deposito)
+            efectos = re.search(r"Efectos del Dep[oó]sito:?\s*([0-9/]+)", deposito)
             datos["fecha_efectos"] = efectos.group(1) if efectos else ""
             datos["fecha_deposito"] = deposito.split("Efectos")[0].strip()
             datos["dias_restantes"] = _dias_hasta(datos.get("fecha_limite", ""))
@@ -1072,14 +1082,52 @@ def extraer_acciones_previas(html_casilla):
     return []
 
 
-def leer_buzon_sunafil(ruc, usuario, clave):
-    """Lee las notificaciones de la casilla electrónica de SUNAFIL.
+def _tabla_por_id(html_casilla, fragmento):
+    """Primera tabla cuyo id contiene `fragmento` (sin distinguir mayúsculas)."""
+    for tabla in _tablas(html_casilla):
+        apertura = re.match(r"<table[^>]*>", tabla, re.S)
+        if apertura and fragmento.lower() in apertura.group(0).lower():
+            return tabla
+    return None
 
-    La autenticación está verificada contra el SSO real, pero la bandeja
-    todavía no se puede leer: la casilla es una aplicación JSF (`si.inbox`,
-    con `;jsessionid=`) y su host no responde desde fuera de Perú. Se avisa en
-    vez de devolver una lista vacía: un buzón vacío y uno inaccesible no son
-    lo mismo.
+
+def extraer_notificaciones(html_casilla):
+    """Filas de la tabla de notificaciones de la bandeja abierta.
+
+    Se buscan por el id `dtNotificaciones` y se nombran con los encabezados de
+    la propia tabla, porque SUNAFIL añade y quita columnas entre pantallas.
+    Si la tabla no trae encabezados utilizables, las columnas salen numeradas.
+    """
+    tabla = _tabla_por_id(html_casilla, "dtNotificaciones")
+    if tabla is None:
+        return []
+
+    encabezados = [
+        _sin_acentos(_texto_celda(c))
+        for c in re.findall(r"<th[^>]*>(.*?)</th>", tabla, re.S)
+    ]
+
+    filas = []
+    for fila in re.findall(r"<tr[^>]*>(.*?)</tr>", tabla, re.S):
+        if "<td" not in fila:
+            continue
+        celdas = _celdas(fila)
+        if not any(celdas):
+            continue
+        if encabezados and len(celdas) >= len(encabezados):
+            filas.append(dict(zip(encabezados, celdas)))
+        else:
+            filas.append({f"columna_{i + 1}": c for i, c in enumerate(celdas)})
+    return filas
+
+
+def leer_buzon_sunafil(ruc, usuario, clave):
+    """Lee la casilla electrónica de SUNAFIL y devuelve sus bandejas.
+
+    El login va contra el SSO y la bandeja se abre pulsando la opción del menú
+    (un POST de JSF con el ViewState de la página de inicio). Devuelve las
+    notificaciones de fiscalización y las acciones previas con sus días
+    restantes.
     """
     code, state = autenticar_sunafil(ruc, usuario, clave)
 
@@ -1092,15 +1140,21 @@ def leer_buzon_sunafil(ruc, usuario, clave):
             detalle=tls,
         )
 
-    raise SolError(
-        "La autenticación con SUNAFIL funciona y la casilla responde, pero la "
-        "apertura de la bandeja por POST sigue devolviendo la página de inicio. "
-        "Mientras se resuelve, usa el lector de HTML ya guardado.",
-        detalle=(
-            f"code={code[:12]}… state={state}. "
-            "extraer_acciones_previas() sí funciona con el HTML de la bandeja."
-        ),
-    )
+    sesion = Sesion()
+    html = abrir_bandeja_sunafil(sesion, "Notificaciones de Fiscalización")
+
+    if _es_inicio(html):
+        raise SolError(
+            "SUNAFIL aceptó el login pero devolvió la página de inicio en vez "
+            "de la bandeja. Puede que la sesión haya caducado o que el menú "
+            "haya cambiado.",
+            detalle=f"code={code[:12]}… state={state}",
+        )
+
+    return {
+        "notificaciones": extraer_notificaciones(html),
+        "acciones_previas": extraer_acciones_previas(html),
+    }
 
 
 class Manejador(BaseHTTPRequestHandler):
