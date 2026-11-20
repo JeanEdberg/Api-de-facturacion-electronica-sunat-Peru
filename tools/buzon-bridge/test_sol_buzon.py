@@ -5,6 +5,7 @@ replican lo que se observó en el sistema real (302 con `code`, 302 a
 `/oauth2/error`, host que no acepta conexión).
 """
 
+import contextlib
 import io
 import json
 import os
@@ -316,6 +317,33 @@ class LeerBuzonSunafilTest(unittest.TestCase):
         self.assertEqual(len(datos["notificaciones"]), 1)
         self.assertEqual(datos["notificaciones"][0]["numero"], "0000123")
         self.assertIn("acciones_previas", datos)
+
+
+class ArranqueTest(unittest.TestCase):
+    """El puerto del argumento manda: antes se ignoraba en silencio."""
+
+    def test_el_puerto_del_argumento_es_el_que_se_usa(self):
+        with mock.patch.object(puente, "ThreadingHTTPServer") as servidor:
+            servidor.return_value.serve_forever.side_effect = KeyboardInterrupt
+            with contextlib.redirect_stdout(io.StringIO()):
+                puente.main(["8080"])
+
+        direccion = servidor.call_args[0][0]
+        self.assertEqual(direccion[1], 8080)
+
+    def test_un_puerto_que_no_es_numero_se_rechaza(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(puente.main(["abc"]), 2)
+
+    def test_un_puerto_fuera_de_rango_se_rechaza(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(puente.main(["99999"]), 2)
+
+    def test_la_ayuda_no_levanta_el_servidor(self):
+        with mock.patch.object(puente, "ThreadingHTTPServer") as servidor:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(puente.main(["--help"]), 0)
+        servidor.assert_not_called()
 
 
 class EnrutadoTest(unittest.TestCase):

@@ -1296,15 +1296,48 @@ class Manejador(BaseHTTPRequestHandler):
         sys.stderr.write("[sol-bridge] %s\n" % (formato % args))
 
 
-def main():
-    servidor = ThreadingHTTPServer((HOST, PUERTO), Manejador)
+def main(argv=None):
+    """Levanta el puente. El puerto se puede pasar como argumento.
+
+    El argumento manda sobre `BUZON_BRIDGE_PORT`: antes se ignoraba en
+    silencio, así que `python sol_buzon.py 8080` escuchaba en otro puerto.
+    """
+    argv = sys.argv[1:] if argv is None else argv
+    puerto = PUERTO
+
+    if argv:
+        if argv[0] in ("-h", "--help"):
+            print(
+                "Uso: python sol_buzon.py [puerto]\n\n"
+                "  puerto   puerto donde escuchar (por defecto "
+                f"{PUERTO}, o BUZON_BRIDGE_PORT)\n\n"
+                "Variables: BUZON_BRIDGE_PORT, BUZON_BRIDGE_HOST, "
+                "BUZON_BRIDGE_TOKEN"
+            )
+            return 0
+        try:
+            puerto = int(argv[0])
+        except ValueError:
+            print(f"El puerto tiene que ser un número, no «{argv[0]}».")
+            return 2
+        if not 1 <= puerto <= 65535:
+            print(f"El puerto {puerto} está fuera del rango 1-65535.")
+            return 2
+
+    servidor = ThreadingHTTPServer((HOST, puerto), Manejador)
     print(
-        f"[sol-bridge] escuchando en {HOST}:{PUERTO}/buzon "
+        f"[sol-bridge] escuchando en {HOST}:{puerto}/buzon "
         f"(token {'sí' if TOKEN else 'no'})",
         flush=True,
     )
-    servidor.serve_forever()
+    try:
+        servidor.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[sol-bridge] cerrando.")
+    finally:
+        servidor.server_close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
