@@ -684,20 +684,15 @@ def _boton_de_menu(html_casilla, etiqueta):
     Se busca por el texto visible, no por el `j_idtNN`: esos ids los genera JSF
     en cada compilación de la página y cambian sin avisar.
     """
-    elemento = _elemento_pulsable(html_casilla, etiqueta)
-    if elemento is None:
-        raise SolError(
-            f"El menú de la casilla no ofrece «{etiqueta}». Puede que SUNAFIL "
-            "haya cambiado la pantalla o que este usuario no tenga ese permiso.",
-            detalle=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_casilla))[:500],
-        )
-    ident = re.search(r'\bid="([^"]+)"', elemento)
-    if not ident:
-        raise SolError(
-            f"El enlace de «{etiqueta}» no tiene id, así que no se puede pulsar.",
-            detalle=re.sub(r"\s+", " ", elemento)[:400],
-        )
-    return ident.group(1)
+    id_elemento = _elemento_pulsable(html_casilla, etiqueta)
+    if id_elemento:
+        return id_elemento
+    raise SolError(
+        f"El menú de la casilla no ofrece «{etiqueta}», o su enlace no tiene "
+        "id. Puede que SUNAFIL haya cambiado la pantalla o que este usuario no "
+        "tenga ese permiso.",
+        detalle=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_casilla))[:500],
+    )
 
 
 def _objeto_js(texto):
@@ -714,37 +709,79 @@ def _objeto_js(texto):
     return campos
 
 
-def _elemento_pulsable(html_casilla, etiqueta):
-    """Devuelve el `<a>`/`<button>` del menú que lleva el texto `etiqueta`.
+def _formulario_que_contiene(html_casilla, posicion):
+    """Id del último `<form>` abierto antes de `posicion`."""
+    formulario = None
+    for m in re.finditer(r'<form\b[^>]*>', html_casilla[:posicion]):
+        ident = re.search(r'\bid\s*=\s*["\']([^"\']+)["\']', m.group(0))
+        if ident:
+            formulario = ident.group(1)
+    return formulario
 
-    Cada opción del menú de la casilla tiene dos elementos con id: el enlace y
-    un contador al lado (`j_idt31` y `j_idt32`). El que dispara la acción es el
-    enlace, así que se busca solo dentro de `<a>` y `<button>`.
+
+def _bloque_de_menu(html_casilla, etiqueta):
+    """Devuelve el `<li>` del menú que contiene el texto `etiqueta`.
+
+    Se trabaja con el `<li>` entero y no con el `<a>`: el texto visible puede
+    estar en un `<a>` sin atributos mientras el `onclick` y el id viven en otro
+    elemento del mismo punto del menú.
     """
-    for trozo in re.split(r"(?=<(?:a|button)\b)", html_casilla)[1:]:
-        cierre = "</a>" if trozo.startswith("<a") else "</button>"
-        elemento = trozo.split(cierre)[0]
-        visible = re.sub(r"<[^>]+>", " ", elemento)
+    for m in re.finditer(r"<li\b", html_casilla):
+        bloque = html_casilla[m.start():]
+        corte = re.search(r"</li>", bloque)
+        if corte:
+            bloque = bloque[:corte.end()]
+
+        visible = re.sub(r"<[^>]+>", " ", bloque)
         visible = re.sub(r"\s+", " ", unescape(visible)).strip()
         if etiqueta.lower() in visible.lower():
-            return elemento
-    return None
+            return bloque, m.start()
+    return None, None
 
 
-def _accion_del_menu(elemento):
-    """Cómo hay que pedir la pantalla al pulsar un elemento del menú.
+def _elemento_pulsable(html_casilla, etiqueta):
+    """Id del elemento del menú que dispara la acción de `etiqueta`."""
+    bloque, _ = _bloque_de_menu(html_casilla, etiqueta)
+    if bloque is None:
+        return None
+    return _accion_del_menu(bloque)[0]
 
-    Devuelve `(id_elemento, formulario, parametros, es_ajax)`.
 
-    La casilla usa tres handlers distintos según la pantalla:
-    `BsF.submitForm('formMenu2',{...})` (submit normal, con campos extra),
-    `PrimeFaces.ab({source:'id'})` y `mojarra.ab(this,event,...)` (los dos AJAX).
+def _accion_del_menu(bloque):
+    """Cómo hay que pedir la pantalla al pulsar una opción del menú.
+
+    Devuelve `(id_elemento, formulario, parametros, es_ajax)` a partir del
+    `<li>` completo, así que da igual en qué etiqueta esté cada atributo.
+
+    La casilla usa tres handlers: `BsF.submitForm('formMenu2',{...})` (submit
+    normal con campos extra), `PrimeFaces.ab({source:'id'})` y
+    `mojarra.ab(this,event,...)` (los dos últimos, AJAX).
     """
-    ident = re.search(r'\bid="([^"]+)"', elemento)
-    id_elemento = ident.group(1) if ident else None
+    # El valor puede venir entre comillas dobles y contener simples dentro
+    # (`submitForm('formMenu2',{...})`), así que no vale cortar por cualquiera.
+    codigo = ""
+    for doble, simple in re.findall(
+        r'onclick\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', bloque
+    ):
+        codigo += unescape(doble or simple)
 
-    onclick = re.search(r'onclick="([^"]*)"', elemento)
-    codigo = unescape(onclick.group(1)) if onclick else ""
+    # El id del elemento que lleva el onclick es el origen del evento.
+    id_elemento = None
+    etiqueta_con_onclick = re.search(
+        r"<[^>]*\bonclick\s*=[^>]*>", bloque, re.S
+    )
+    if etiqueta_con_onclick:
+        ident = re.search(
+            r'\bid\s*=\s*["\']([^"\']+)["\']', etiqueta_con_onclick.group(0)
+        )
+        id_elemento = ident.group(1) if ident else None
+
+    if id_elemento is None:
+        # Sin id en el enlace, se usa cualquier id del bloque que parezca JSF.
+        for ident in re.findall(r'\bid\s*=\s*["\']([^"\']+)["\']', bloque):
+            if ":" in ident:
+                id_elemento = ident
+                break
 
     # submitForm: submit normal con parámetros explícitos.
     llamada = re.search(
@@ -753,8 +790,8 @@ def _accion_del_menu(elemento):
     if llamada:
         return id_elemento, llamada.group(1), _objeto_js(llamada.group(2)), False
 
-    # AJAX. El formulario es el prefijo del id: `formMenu2:j_idt25:...`.
-    formulario = id_elemento.split(":")[0] if id_elemento else None
+    # AJAX: el formulario es el prefijo del id o el que contiene el bloque.
+    formulario = id_elemento.split(":")[0] if id_elemento and ":" in id_elemento else None
     return id_elemento, formulario, {}, True
 
 
@@ -802,20 +839,22 @@ def abrir_bandeja_sunafil(sesion, etiqueta="Notificaciones de Fiscalización"):
     url = f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador"
     _, inicio = sesion.get(url)
 
-    elemento = _elemento_pulsable(inicio, etiqueta)
-    if elemento is None:
+    bloque, posicion = _bloque_de_menu(inicio, etiqueta)
+    if bloque is None:
         raise SolError(
             f"El menú de la casilla no ofrece «{etiqueta}». Puede que SUNAFIL "
             "haya cambiado la pantalla o que este usuario no tenga ese permiso.",
             detalle=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", inicio))[:500],
         )
 
-    id_elemento, formulario, parametros, es_ajax = _accion_del_menu(elemento)
+    id_elemento, formulario, parametros, es_ajax = _accion_del_menu(bloque)
+    if not formulario:
+        formulario = _formulario_que_contiene(inicio, posicion)
     if not formulario:
         raise SolError(
-            f"No se pudo saber el formulario de «{etiqueta}»: el enlace no "
-            "trae id ni un onclick reconocible.",
-            detalle=re.sub(r"\s+", " ", elemento)[:400],
+            f"No se pudo saber el formulario de «{etiqueta}»: ni el id del "
+            "enlace ni el formulario que lo contiene lo indican.",
+            detalle=re.sub(r"\s+", " ", bloque)[:400],
         )
 
     datos = _campos_ocultos(inicio, formulario)

@@ -627,16 +627,40 @@ class ParametrosDelMenuTest(unittest.TestCase):
     """
 
     def test_lee_formulario_y_parametros_del_onclick(self):
-        elemento = puente._elemento_pulsable(self.HTML, "Notificaciones de Fiscalización")
+        bloque, _ = puente._bloque_de_menu(self.HTML, "Notificaciones de Fiscalización")
 
-        self.assertIsNotNone(elemento)
-        _, formulario, parametros, es_ajax = puente._accion_del_menu(elemento)
+        self.assertIsNotNone(bloque)
+        _, formulario, parametros, es_ajax = puente._accion_del_menu(bloque)
         self.assertEqual(formulario, "formMenu2")
         self.assertEqual(parametros["param_uuid"], "abc-123")
         self.assertFalse(es_ajax)
 
     def test_sin_onclick_devuelve_nada(self):
-        self.assertEqual(puente._elemento_pulsable("<a><span>X</span></a>", "Y"), None)
+        self.assertEqual(puente._elemento_pulsable("<li><a><span>X</span></a></li>", "Y"), None)
+
+    SUELTO = """
+    <form id="formMenu2">
+    <ul>
+    <li><a href="#"><span>Notificaciones de Fiscalizaci&oacute;n</span></a>
+        <span id="formMenu2:j:0" onclick="mojarra.ab(this,event,'action','@this','@all')">7</span></li>
+    </ul></form>
+    """
+
+    def test_encuentra_el_onclick_aunque_el_enlace_no_lo_tenga(self):
+        """El <a> puede ir pelado: el onclick vive en otro elemento del <li>."""
+        bloque, _ = puente._bloque_de_menu(self.SUELTO, "Notificaciones de Fiscalización")
+
+        self.assertIsNotNone(bloque)
+        id_elemento, formulario, _, es_ajax = puente._accion_del_menu(bloque)
+        self.assertEqual(id_elemento, "formMenu2:j:0")
+        self.assertEqual(formulario, "formMenu2")
+        self.assertTrue(es_ajax)
+
+    def test_sin_onclick_cae_al_formulario_que_contiene_el_menu(self):
+        pagina = '<form id="formMenu2"><ul><li><a href="#"><span>Acciones Previas</span></a></li></ul></form>'
+        bloque, posicion = puente._bloque_de_menu(pagina, "Acciones Previas")
+
+        self.assertEqual(puente._formulario_que_contiene(pagina, posicion), "formMenu2")
 
     def test_abrir_bandeja_envia_los_parametros_del_onclick(self):
         sesion = mock.Mock()
