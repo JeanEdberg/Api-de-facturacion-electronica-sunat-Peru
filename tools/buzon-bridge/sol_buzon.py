@@ -68,7 +68,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
-from datetime import datetime
+from datetime import date, datetime
 from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -759,6 +759,73 @@ def abrir_bandeja_sunafil(
     return html
 
 
+# Columnas de la tabla de Acciones Previas, tal como las muestra la casilla.
+COLUMNAS_ACCIONES = (
+    "tipo",
+    "registro",
+    "fecha_deposito",
+    "fecha_acuse",
+    "fecha_notificacion",
+    "plazo",
+    "fecha_limite",
+)
+
+
+def _celdas(fila):
+    """Texto de cada `<td>` de una fila, con los saltos de línea respetados."""
+    salida = []
+    for celda in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S):
+        # Un `<td>` puede traer varias líneas ("Efectos del Depósito: ...").
+        texto = re.sub(r"<br\s*/?>", " ", celda)
+        texto = re.sub(r"<[^>]+>", " ", texto)
+        texto = unescape(re.sub(r"\s+", " ", texto)).strip()
+        salida.append(texto)
+    return salida
+
+
+def _dias_hasta(fecha):
+    """Días que faltan para una fecha `dd/mm/aaaa`, o None si no se entiende."""
+    if not fecha:
+        return None
+    try:
+        limite = datetime.strptime(fecha.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        return None
+    return (limite - date.today()).days
+
+
+def extraer_acciones_previas(html_casilla):
+    """Saca las filas de la tabla de Acciones Previas.
+
+    La tabla trae más celdas que columnas de interés: las últimas son iconos
+    (ver documento, envío) y quedan vacías en el texto. Se corta por las
+    columnas conocidas y se ignoran las filas de cabecera o de relleno.
+    """
+    acciones = []
+    for fila in re.findall(r"<tr[^>]*>(.*?)</tr>", html_casilla, re.S):
+        if "<td" not in fila:
+            continue
+        celdas = _celdas(fila)
+        if len(celdas) < len(COLUMNAS_ACCIONES):
+            continue
+        if not any(celdas):
+            continue
+
+        datos = dict(zip(COLUMNAS_ACCIONES, celdas))
+        # Sin registro no es una acción: es una fila de "no hay datos".
+        if not datos.get("registro") or not re.search(r"\d{6,}", datos["registro"]):
+            continue
+
+        deposito = datos["fecha_deposito"]
+        efectos = re.search(r"Efectos del Dep[oó]sito:\s*([0-9/]+)", deposito)
+        datos["fecha_efectos"] = efectos.group(1) if efectos else ""
+        datos["fecha_deposito"] = deposito.split("Efectos")[0].strip()
+
+        datos["dias_restantes"] = _dias_hasta(datos.get("fecha_limite", ""))
+        acciones.append(datos)
+    return acciones
+
+
 def leer_buzon_sunafil(ruc, usuario, clave):
     """Lee las notificaciones de la casilla electrónica de SUNAFIL.
 
@@ -781,9 +848,12 @@ def leer_buzon_sunafil(ruc, usuario, clave):
 
     raise SolError(
         "La autenticación con SUNAFIL funciona y la casilla responde, pero la "
-        "lectura de la bandeja todavía no está implementada: falta capturar la "
-        "petición de la lista con una sesión real.",
-        detalle=f"code={code[:12]}… state={state}",
+        "apertura de la bandeja por POST sigue devolviendo la página de inicio. "
+        "Mientras se resuelve, usa el lector de HTML ya guardado.",
+        detalle=(
+            f"code={code[:12]}… state={state}. "
+            "extraer_acciones_previas() sí funciona con el HTML de la bandeja."
+        ),
     )
 
 

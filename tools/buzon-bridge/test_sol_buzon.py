@@ -158,7 +158,7 @@ class LeerBuzonSunafilTest(unittest.TestCase):
             with self.assertRaises(puente.SolError) as ctx:
                 puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
 
-        self.assertIn("no está implementada", ctx.exception.mensaje)
+        self.assertIn("POST", ctx.exception.mensaje)
 
 
 class EnrutadoTest(unittest.TestCase):
@@ -609,6 +609,62 @@ class PostAjaxTest(unittest.TestCase):
 
         self.assertNotIn("Faces-request", capturado["cabeceras"])
         self.assertNotIn("javax.faces.partial.ajax", capturado["cuerpo"])
+
+
+class AccionesPreviasTest(unittest.TestCase):
+    """Datos reales de la casilla de INMOA (una carta inductiva)."""
+
+    FILA = """
+    <tr>
+    <td>CARTAS INDUCTIVAS GENERAL</td>
+    <td>0000122241 - 2026 - SUNAFIL/DPPR/SDPA</td>
+    <td>23/10/2026 23:37<br/>Efectos del Dep&oacute;sito: 26/10/2026</td>
+    <td>29/10/2026 12:51<br/>29/10/2026</td>
+    <td></td>
+    <td>20</td>
+    <td>26/11/2026</td>
+    <td></td><td></td><td></td>
+    </tr>
+    """
+
+    def test_extrae_la_fila_completa(self):
+        acciones = puente.extraer_acciones_previas(f"<table>{self.FILA}</table>")
+
+        self.assertEqual(len(acciones), 1)
+        accion = acciones[0]
+        self.assertEqual(accion["tipo"], "CARTAS INDUCTIVAS GENERAL")
+        self.assertEqual(accion["registro"], "0000122241 - 2026 - SUNAFIL/DPPR/SDPA")
+        self.assertEqual(accion["fecha_deposito"], "23/10/2026 23:37")
+        self.assertEqual(accion["fecha_efectos"], "26/10/2026")
+        self.assertEqual(accion["plazo"], "20")
+        self.assertEqual(accion["fecha_limite"], "26/11/2026")
+
+    def test_separa_la_fecha_de_efectos_del_deposito(self):
+        accion = puente.extraer_acciones_previas(self.FILA)[0]
+
+        self.assertNotIn("Efectos", accion["fecha_deposito"])
+        self.assertEqual(accion["fecha_efectos"], "26/10/2026")
+
+    def test_calcula_los_dias_que_faltan(self):
+        accion = puente.extraer_acciones_previas(self.FILA)[0]
+
+        self.assertIsInstance(accion["dias_restantes"], int)
+
+    def test_una_tabla_vacia_no_inventa_filas(self):
+        vacia = "<table><tr><td>No hay registros</td></tr></table>"
+
+        self.assertEqual(puente.extraer_acciones_previas(vacia), [])
+
+    def test_ignora_la_fila_de_cabecera(self):
+        cabecera = """
+        <tr><th>Tipo de Requerimiento</th><th>Registro</th><th>Fecha</th></tr>
+        """
+
+        self.assertEqual(puente.extraer_acciones_previas(cabecera), [])
+
+    def test_una_fecha_limite_ilegible_no_rompe(self):
+        self.assertIsNone(puente._dias_hasta(""))
+        self.assertIsNone(puente._dias_hasta("pendiente"))
 
 
 if __name__ == "__main__":
