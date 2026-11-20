@@ -487,5 +487,56 @@ class AnalizarCapturaTest(unittest.TestCase):
         self.assertEqual(analisis.tablas(self.HTML), ["formNotificaciones:dt"])
 
 
+class AbrirBandejaSunafilTest(unittest.TestCase):
+    """La bandeja se abre con un POST de JSF, no con un GET."""
+
+    INICIO = """
+    <form id="formMenu2" action="/si.inbox/Inicio/Empleador">
+    <input type="hidden" name="javax.faces.ViewState" value="VS:1" />
+    <li><span id="formMenu2:a:0">P&aacute;gina de inicio</span></li>
+    <li><span id="formMenu2:a:1">Notificaciones de Fiscalizaci&oacute;n</span></li>
+    <li><span id="formMenu2:a:2">Notificaciones de Cobranza</span></li>
+    </form>
+    """
+
+    def test_busca_el_boton_por_texto_y_no_por_j_idt(self):
+        boton = puente._boton_de_menu(self.INICIO, "Notificaciones de Fiscalización")
+        self.assertEqual(boton, "formMenu2:a:1")
+
+    def test_avisa_si_el_menu_no_ofrece_la_bandeja(self):
+        with self.assertRaises(puente.SolError) as ctx:
+            puente._boton_de_menu(self.INICIO, "Notificaciones de Multas")
+        self.assertIn("no ofrece", ctx.exception.mensaje)
+
+    def test_falla_si_la_pagina_no_trae_viewstate(self):
+        with self.assertRaises(puente.SolError) as ctx:
+            puente._viewstate("<html>sin estado</html>")
+        self.assertIn("sin ViewState", ctx.exception.mensaje)
+
+    def test_abre_la_bandeja_con_viewstate_y_boton(self):
+        sesion = mock.Mock()
+        sesion.get.return_value = ("url", self.INICIO)
+        sesion.post.return_value = ("url", "<html>bandeja</html>")
+
+        html = puente.abrir_bandeja_sunafil(sesion, "Notificaciones de Cobranza")
+
+        self.assertEqual(html, "<html>bandeja</html>")
+        destino, datos = sesion.post.call_args[0]
+        self.assertTrue(destino.endswith("/si.inbox/Inicio/Empleador"))
+        self.assertEqual(datos["javax.faces.ViewState"], "VS:1")
+        self.assertEqual(datos["formMenu2:a:2"], "formMenu2:a:2")
+        self.assertEqual(datos["formMenu2"], "formMenu2")
+
+    def test_por_defecto_abre_la_bandeja_de_fiscalizacion(self):
+        sesion = mock.Mock()
+        sesion.get.return_value = ("url", self.INICIO)
+        sesion.post.return_value = ("url", "<html/>")
+
+        puente.abrir_bandeja_sunafil(sesion)
+
+        datos = sesion.post.call_args[0][1]
+        self.assertIn("formMenu2:a:1", datos)
+
+
 if __name__ == "__main__":
     unittest.main()

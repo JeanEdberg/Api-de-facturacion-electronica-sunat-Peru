@@ -58,6 +58,30 @@ def tablas(h):
     return sorted(set(re.findall(r'<table[^>]*\bid="([^"]+)"', h)))
 
 
+def columnas(h, id_tabla):
+    """Encabezados de una tabla, para saber qué trae cada fila."""
+    bloque = h.split(f'id="{id_tabla}"', 1)
+    if len(bloque) < 2:
+        return []
+    trozo = bloque[1].split("</table>", 1)[0]
+    celdas = re.findall(r"<th[^>]*>(.*?)</th>", trozo, re.S)
+    return [_texto(c) for c in celdas if _texto(c)]
+
+
+def filas(h, id_tabla, limite=3):
+    """Primeras filas de una tabla, ya en texto, para ver el formato real."""
+    bloque = h.split(f'id="{id_tabla}"', 1)
+    if len(bloque) < 2:
+        return []
+    trozo = bloque[1].split("</table>", 1)[0]
+    salida = []
+    for fila in re.findall(r"<tr[^>]*>(.*?)</tr>", trozo, re.S)[:limite]:
+        celdas = [_texto(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S)]
+        if any(celdas):
+            salida.append(celdas)
+    return salida
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -96,7 +120,14 @@ def main():
 
         listas = tablas(h)
         if listas:
-            print("\nTABLAS:", ", ".join(listas[:10]))
+            print("\nTABLAS:")
+            for ident in listas[:10]:
+                print(f"  {ident}")
+                encabezados = columnas(h, ident)
+                if encabezados:
+                    print(f"      columnas: {encabezados}")
+                for fila in filas(h, ident):
+                    print(f"      fila: {fila}")
 
         for clave in ("Notificaci", "Bandeja", "Acuse"):
             veces = len(re.findall(clave, h, re.I))

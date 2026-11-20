@@ -135,22 +135,34 @@ def main():
         _informe(carpeta, grabador)
         return 1
 
-    print("3. Abriendo la bandeja…")
-    for ruta in ("/si.inbox/", "/si.inbox/Bandeja.htm", "/si.inbox/Bandeja"):
+    print("3. Abriendo el inicio de la casilla…")
+    try:
+        sesion.get(f"{puente.URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador")
+    except puente.SolError as e:
+        print(f"   No se pudo abrir el inicio: {e.mensaje}")
+        _informe(carpeta, grabador)
+        return 1
+
+    # La bandeja no tiene ruta GET: se abre con el POST del menú de JSF.
+    for etiqueta in (
+        "Notificaciones de Fiscalización",
+        "Notificaciones de Cobranza",
+    ):
+        print(f"4. Abriendo «{etiqueta}»…")
         try:
-            sesion.get(puente.URL_CASILLA_SUNAFIL + ruta)
+            html = puente.abrir_bandeja_sunafil(sesion, etiqueta)
+            print(f"   {len(html)} B de respuesta")
         except puente.SolError as e:
-            print(f"   {ruta}: {e.mensaje}")
-            continue
+            print(f"   {etiqueta}: {e.mensaje}")
 
     _informe(carpeta, grabador)
     print(
-        "\nRevisa index.txt: la bandeja suele cargarse por AJAX, así que busca\n"
-        "la respuesta JSON o la que traiga la lista de notificaciones.\n"
-        "Si no aparece, repite la captura con las Herramientas de Desarrollo del\n"
-        "navegador (pestaña Red) abiertas en la bandeja.\n\n"
-        "Comparte la carpeta solo con quien implemente el lector: contiene\n"
-        "cookies de sesión. Bórrala al terminar."
+        "\nYa están capturadas las respuestas de las dos bandejas. Pásale la\n"
+        "carpeta al analizador:\n\n"
+        "    python analizar_captura.py "
+        + os.path.basename(carpeta)
+        + "\n\n"
+        "La carpeta contiene cookies de sesión: bórrala al terminar."
     )
     return 0
 

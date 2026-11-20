@@ -639,6 +639,61 @@ def _sondear_sunafil():
         return True, f"no negocia TLS: {e.detalle}"
 
 
+def _viewstate(html_casilla):
+    """Saca el `javax.faces.ViewState` que exige cada POST de JSF."""
+    m = re.search(
+        r'name="javax\.faces\.ViewState"[^>]*value="([^"]+)"', html_casilla
+    )
+    if not m:
+        raise SolError(
+            "La casilla respondió sin ViewState. La sesión no está iniciada o "
+            "la página cambió de formato.",
+            detalle=html_casilla[:300],
+        )
+    return m.group(1)
+
+
+def _boton_de_menu(html_casilla, etiqueta):
+    """Devuelve el id del botón del menú cuyo texto contiene `etiqueta`.
+
+    Se busca por el texto visible, no por el `j_idtNN`: esos ids los genera
+    JSF en cada compilación de la página y cambian sin avisar.
+    """
+    for trozo in re.split(r"(?=<span\b)", html_casilla)[1:]:
+        ident = re.search(r'id="([^"]+)"', trozo)
+        if not ident:
+            continue
+        visible = re.sub(r"<[^>]+>", " ", trozo.split("</li>")[0])
+        visible = re.sub(r"\s+", " ", unescape(visible)).strip()
+        if etiqueta.lower() in visible.lower():
+            return ident.group(1)
+    raise SolError(
+        f"El menú de la casilla no ofrece «{etiqueta}». Puede que SUNAFIL haya "
+        "cambiado la pantalla o que este usuario no tenga ese permiso.",
+        detalle=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_casilla))[:500],
+    )
+
+
+def abrir_bandeja_sunafil(sesion, etiqueta="Notificaciones de Fiscalización"):
+    """Abre una bandeja del menú de la casilla y devuelve su HTML.
+
+    La casilla es JSF con PrimeFaces: no hay ruta GET para la bandeja, se pide
+    por POST con el ViewState y el id del botón del menú.
+    """
+    _, inicio = sesion.get(f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador")
+    vista = _viewstate(inicio)
+    boton = _boton_de_menu(inicio, etiqueta)
+    _, html = sesion.post(
+        f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador",
+        {
+            "formMenu2": "formMenu2",
+            boton: boton,
+            "javax.faces.ViewState": vista,
+        },
+    )
+    return html
+
+
 def leer_buzon_sunafil(ruc, usuario, clave):
     """Lee las notificaciones de la casilla electrónica de SUNAFIL.
 
