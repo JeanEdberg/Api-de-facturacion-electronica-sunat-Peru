@@ -445,5 +445,47 @@ class SondearSunafilTest(unittest.TestCase):
         self.assertEqual(ctx.exception.detalle, "sin conexión")
 
 
+class AnalizarCapturaTest(unittest.TestCase):
+    """El analizador empareja cada botón de menú con su texto visible."""
+
+    HTML = """
+    <form id="formMenu2" action="/si.inbox/Inicio/Empleador">
+    <input type="hidden" name="javax.faces.ViewState" value="V1:V2" />
+    <li><span id="formMenu2:a:0">Notificaciones de Fiscalizaci&oacute;n</span></li>
+    <li><span id="formMenu2:a:1">Buz&oacute;n de Sugerencias</span></li>
+    </form>
+    <form id="formNotificaciones" action="/si.inbox/Inicio/Empleador">
+    <input type="hidden" name="formNotificaciones" value="formNotificaciones" />
+    <input type="hidden" name="javax.faces.ViewState" value="V3:V4" />
+    <table id="formNotificaciones:dt"></table>
+    </form>
+    """
+
+    def test_empareja_id_con_texto_del_menu(self):
+        import analizar_captura as analisis
+
+        encontrados = analisis.menus(self.HTML)
+
+        self.assertEqual(len(encontrados), 2)
+        self.assertEqual(encontrados[0][0], "formMenu2:a:0")
+        self.assertEqual(encontrados[0][1], "Notificaciones de Fiscalización")
+        self.assertEqual(encontrados[1][1], "Buzón de Sugerencias")
+
+    def test_saca_accion_y_viewstate_de_cada_formulario(self):
+        import analizar_captura as analisis
+
+        forms = {f["id"]: f for f in analisis.formularios(self.HTML)}
+
+        self.assertEqual(forms["formMenu2"]["viewstate"], "V1:V2")
+        self.assertEqual(forms["formMenu2"]["accion"], "/si.inbox/Inicio/Empleador")
+        self.assertEqual(forms["formNotificaciones"]["viewstate"], "V3:V4")
+        self.assertIn("formNotificaciones", forms["formNotificaciones"]["campos"])
+
+    def test_lista_las_tablas_candidatas(self):
+        import analizar_captura as analisis
+
+        self.assertEqual(analisis.tablas(self.HTML), ["formNotificaciones:dt"])
+
+
 if __name__ == "__main__":
     unittest.main()
