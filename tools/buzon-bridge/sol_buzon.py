@@ -699,6 +699,63 @@ def _boton_de_menu(html_casilla, etiqueta):
     )
 
 
+def _objeto_js(texto):
+    """Convierte un objeto literal de JavaScript en un dict.
+
+    Los `onclick` de PrimeFaces traen `{'campo':'valor','otro':'valor'}`, con
+    comillas simples y sin anidamiento. Se acepta también sin comillas.
+    """
+    campos = {}
+    for clave, valor in re.findall(
+        r"""['"]?([\w:.\[\]-]+)['"]?\s*:\s*['"]([^'"]*)['"]""", texto
+    ):
+        campos[clave] = unescape(valor)
+    return campos
+
+
+def _enlace_de_menu(html_casilla, etiqueta):
+    """Devuelve el `<a ...>` del menú cuyo texto contiene `etiqueta`.
+
+    El `onclick` de ese enlace es la fuente de verdad: dice el formulario y los
+    parámetros exactos que se envían al pulsar.
+    """
+    for trozo in re.split(r"(?=<a\b)", html_casilla)[1:]:
+        enlace = trozo.split("</a>")[0]
+        visible = re.sub(r"<[^>]+>", " ", enlace)
+        visible = re.sub(r"\s+", " ", unescape(visible)).strip()
+        if etiqueta.lower() in visible.lower():
+            return enlace
+    return None
+
+
+def _parametros_del_menu(html_casilla, etiqueta):
+    """Formulario y parámetros que el menú envía al pulsar una opción.
+
+    Devuelve `(id_formulario, parametros)`. El `onclick` es del tipo
+    `BsF.submitForm('formMenu2',{...});return false`, así que ahí están tanto el
+    nombre del formulario como los campos, sin tener que adivinarlos.
+    """
+    enlace = _enlace_de_menu(html_casilla, etiqueta)
+    if enlace is None:
+        return None, None
+
+    onclick = re.search(r'onclick="([^"]*)"', enlace)
+    if not onclick:
+        return None, None
+
+    llamada = re.search(r"submitForm\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\{.*?\})\s*\)",
+                        unescape(onclick.group(1)), re.S)
+    if not llamada:
+        return None, None
+
+    formulario = llamada.group(1)
+    parametros = _objeto_js(llamada.group(2))
+    # El propio objeto a veces no incluye el botón: se añade si falta.
+    if not parametros:
+        return formulario, None
+    return formulario, parametros
+
+
 def _campos_ocultos(html_casilla, id_formulario):
     """Todos los `<input type="hidden">` de un formulario.
 
@@ -737,19 +794,29 @@ def abrir_bandeja_sunafil(
 ):
     """Abre una bandeja del menú de la casilla y devuelve la respuesta.
 
-    La casilla es JSF con PrimeFaces: no hay ruta GET para la bandeja. Se pide
-    por POST con el formulario del menú completo y el botón pulsado.
+    La casilla es JSF con PrimeFaces y no hay ruta GET para la bandeja. El
+    enlace del menú llama a `BsF.submitForm(formulario, parametros)`, así que se
+    leen esos parámetros del `onclick` y se envían junto con los campos ocultos
+    del formulario, que es lo que haría el navegador.
     """
-    _, inicio = sesion.get(f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador")
-    boton = _boton_de_menu(inicio, etiqueta)
-    datos = _campos_ocultos(inicio, "formMenu2")
-    datos[boton] = boton
     url = f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador"
+    _, inicio = sesion.get(url)
+
+    formulario, parametros = _parametros_del_menu(inicio, etiqueta)
+    if formulario is None:
+        # Sin `onclick` utilizable se cae al botón y al formulario de siempre.
+        formulario = "formMenu2"
+        parametros = {_boton_de_menu(inicio, etiqueta): _boton_de_menu(inicio, etiqueta)}
+
+    datos = _campos_ocultos(inicio, formulario)
+    datos.update(parametros)
+
     if parcial:
+        fuente = next(iter(parametros), None)
         datos.update(
             {
-                "javax.faces.source": boton,
-                "javax.faces.partial.execute": boton,
+                "javax.faces.source": fuente or formulario,
+                "javax.faces.partial.execute": fuente or formulario,
                 "javax.faces.partial.render": "@all",
             }
         )

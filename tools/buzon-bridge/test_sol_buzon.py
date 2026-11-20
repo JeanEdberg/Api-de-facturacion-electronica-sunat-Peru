@@ -611,6 +611,43 @@ class PostAjaxTest(unittest.TestCase):
         self.assertNotIn("javax.faces.partial.ajax", capturado["cuerpo"])
 
 
+class ParametrosDelMenuTest(unittest.TestCase):
+    """El `onclick` del menú dice los campos reales del POST."""
+
+    HTML = """
+    <form id="formMenu2">
+    <input type="hidden" name="javax.faces.ViewState" value="VS:1"/>
+    <li><a href="#" onclick="BsF.submitForm('formMenu2',{'formMenu2:a:1':'formMenu2:a:1','param_uuid':'abc-123'});return false">
+    <span id="formMenu2:a:1">Notificaciones de Fiscalizaci&oacute;n</span></a></li>
+    </form>
+    """
+
+    def test_lee_formulario_y_parametros_del_onclick(self):
+        formulario, parametros = puente._parametros_del_menu(
+            self.HTML, "Notificaciones de Fiscalización"
+        )
+
+        self.assertEqual(formulario, "formMenu2")
+        self.assertEqual(parametros["formMenu2:a:1"], "formMenu2:a:1")
+        self.assertEqual(parametros["param_uuid"], "abc-123")
+
+    def test_sin_onclick_devuelve_nada(self):
+        self.assertEqual(puente._parametros_del_menu("<a><span>X</span></a>", "X"),
+                         (None, None))
+
+    def test_abrir_bandeja_envia_los_parametros_del_onclick(self):
+        sesion = mock.Mock()
+        sesion.get.return_value = ("url", self.HTML)
+        sesion.post.return_value = ("url", "<html/>")
+
+        puente.abrir_bandeja_sunafil(sesion)
+
+        datos = sesion.post.call_args[0][1]
+        self.assertEqual(datos["param_uuid"], "abc-123")
+        self.assertEqual(datos["javax.faces.ViewState"], "VS:1")
+        self.assertEqual(datos["formMenu2:a:1"], "formMenu2:a:1")
+
+
 class AccionesPreviasTest(unittest.TestCase):
     """Datos reales de la casilla de INMOA (una carta inductiva)."""
 
