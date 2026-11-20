@@ -662,6 +662,50 @@ class AccionesPreviasTest(unittest.TestCase):
 
         self.assertEqual(puente.extraer_acciones_previas(cabecera), [])
 
+    PAGINA = """
+    <table id="layout"><tr><td>
+      <table id="menu"><tr><td>Men&uacute;</td></tr></table>
+    </td><td>
+      <table id="formAcciones:dtAcciones">
+        <thead><tr>
+          <th>Tipo de Requerimiento</th><th>Registro</th>
+          <th>Fecha de Dep&oacute;sito</th><th>Fecha Acuse de Recibo</th>
+          <th>Fecha de Notificaci&oacute;n</th><th>Plazo</th>
+          <th>Fecha L&iacute;mite de Presentaci&oacute;n</th><th>Opci&oacute;n</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>CARTAS INDUCTIVAS GENERAL</td>
+          <td>0000122241 - 2026 - SUNAFIL/DPPR/SDPA</td>
+          <td>23/10/2026 23:37<br/>Efectos del Dep&oacute;sito: 26/10/2026</td>
+          <td>29/10/2026 12:51<br/>29/10/2026</td>
+          <td></td><td>20</td><td>26/11/2026</td><td></td></tr>
+        </tbody>
+      </table>
+    </td></tr></table>
+    """
+
+    def test_encuentra_la_tabla_entre_tablas_anidadas(self):
+        """La página trae varias tablas: hay que dar con la de acciones."""
+        acciones = puente.extraer_acciones_previas(self.PAGINA)
+
+        self.assertEqual(len(acciones), 1)
+        self.assertEqual(acciones[0]["fecha_limite"], "26/11/2026")
+
+    def test_usa_los_encabezados_para_ubicar_cada_columna(self):
+        """Si SUNAFIL reordena columnas, los encabezados mandan."""
+        reordenada = """
+        <table>
+        <thead><tr><th>Plazo</th><th>Registro</th><th>Fecha L&iacute;mite</th></tr></thead>
+        <tbody><tr><td>15</td><td>0000999999 - 2026 - SUNAFIL/X</td>
+        <td>01/12/2026</td></tr></tbody>
+        </table>
+        """
+        accion = puente.extraer_acciones_previas(reordenada)[0]
+
+        self.assertEqual(accion["plazo"], "15")
+        self.assertEqual(accion["fecha_limite"], "01/12/2026")
+        self.assertEqual(accion["registro"], "0000999999 - 2026 - SUNAFIL/X")
+
     def test_una_fecha_limite_ilegible_no_rompe(self):
         self.assertIsNone(puente._dias_hasta(""))
         self.assertIsNone(puente._dias_hasta("pendiente"))

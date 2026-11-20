@@ -759,7 +759,7 @@ def abrir_bandeja_sunafil(
     return html
 
 
-# Columnas de la tabla de Acciones Previas, tal como las muestra la casilla.
+# Claves de las columnas que interesan de la tabla de Acciones Previas.
 COLUMNAS_ACCIONES = (
     "tipo",
     "registro",
@@ -770,17 +770,83 @@ COLUMNAS_ACCIONES = (
     "fecha_limite",
 )
 
+# Cómo reconocer cada columna por su encabezado visible. Se busca por texto y
+# no por posición porque SUNAFIL añade y quita columnas (Opción, Ver
+# Documento, Envío Req.) sin avisar.
+PISTAS_COLUMNA = (
+    ("tipo", ("tipo de requerimiento", "tipo")),
+    ("registro", ("registro",)),
+    ("fecha_deposito", ("fecha de deposito", "deposito")),
+    ("fecha_acuse", ("acuse",)),
+    ("fecha_notificacion", ("notificacion",)),
+    ("plazo", ("plazo",)),
+    ("fecha_limite", ("limite",)),
+)
+
+
+def _texto_celda(celda):
+    """Texto plano de una celda, con los `<br>` como separación."""
+    texto = re.sub(r"<br\s*/?>", " ", celda)
+    texto = re.sub(r"<[^>]+>", " ", texto)
+    return unescape(re.sub(r"\s+", " ", texto)).strip()
+
 
 def _celdas(fila):
     """Texto de cada `<td>` de una fila, con los saltos de línea respetados."""
+    return [_texto_celda(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S)]
+
+
+def _sin_acentos(texto):
+    reemplazos = str.maketrans("áéíóúÁÉÍÓÚñÑ", "aeiouAEIOUnN")
+    return texto.translate(reemplazos).lower()
+
+
+def _tablas(html_casilla):
+    """HTML interno de cada tabla, equilibrando el anidamiento.
+
+    Si el texto no trae `<table>` (un fragmento pegado a mano, por ejemplo) se
+    devuelve entero para no perder las filas.
+    """
     salida = []
-    for celda in re.findall(r"<td[^>]*>(.*?)</td>", fila, re.S):
-        # Un `<td>` puede traer varias líneas ("Efectos del Depósito: ...").
-        texto = re.sub(r"<br\s*/?>", " ", celda)
-        texto = re.sub(r"<[^>]+>", " ", texto)
-        texto = unescape(re.sub(r"\s+", " ", texto)).strip()
-        salida.append(texto)
-    return salida
+    for apertura in re.finditer(r"<table\b", html_casilla):
+        profundidad = 0
+        for marca in re.finditer(r"</?table\b", html_casilla[apertura.start():]):
+            if marca.group(0).startswith("</"):
+                profundidad -= 1
+                if profundidad == 0:
+                    fin = apertura.start() + marca.end()
+                    salida.append(html_casilla[apertura.start():fin])
+                    break
+            else:
+                profundidad += 1
+    return salida or [html_casilla]
+
+
+def _mapa_columnas(tabla):
+    """Índice de cada columna conocida, según los encabezados de la tabla.
+
+    Si la tabla no trae `<th>` utilizables se devuelve el orden conocido, que es
+    el que usa la casilla hoy.
+    """
+    encabezados = [
+        _sin_acentos(_texto_celda(c))
+        for c in re.findall(r"<th[^>]*>(.*?)</th>", tabla, re.S)
+    ]
+
+    mapa = {}
+    for indice, texto in enumerate(encabezados):
+        for clave, pistas in PISTAS_COLUMNA:
+            if clave in mapa:
+                continue
+            if any(pista in texto for pista in pistas):
+                mapa[clave] = indice
+                break
+
+    if "registro" in mapa:
+        return mapa
+    if not encabezados:
+        return {clave: i for i, clave in enumerate(COLUMNAS_ACCIONES)}
+    return {}
 
 
 def _dias_hasta(fecha):
@@ -795,35 +861,45 @@ def _dias_hasta(fecha):
 
 
 def extraer_acciones_previas(html_casilla):
-    """Saca las filas de la tabla de Acciones Previas.
+    """Saca las filas de la tabla de Acciones Previas de la casilla.
 
-    La tabla trae más celdas que columnas de interés: las últimas son iconos
-    (ver documento, envío) y quedan vacías en el texto. Se corta por las
-    columnas conocidas y se ignoran las filas de cabecera o de relleno.
+    Busca la tabla por sus encabezados (Registro + Plazo o Fecha Límite) en vez
+    de asumir que es la primera: la página trae varias. Si no encuentra los
+    encabezados, cae al orden conocido de columnas.
     """
-    acciones = []
-    for fila in re.findall(r"<tr[^>]*>(.*?)</tr>", html_casilla, re.S):
-        if "<td" not in fila:
+    for tabla in _tablas(html_casilla):
+        mapa = _mapa_columnas(tabla)
+        if "registro" not in mapa:
             continue
-        celdas = _celdas(fila)
-        if len(celdas) < len(COLUMNAS_ACCIONES):
-            continue
-        if not any(celdas):
+        if "plazo" not in mapa and "fecha_limite" not in mapa:
             continue
 
-        datos = dict(zip(COLUMNAS_ACCIONES, celdas))
-        # Sin registro no es una acción: es una fila de "no hay datos".
-        if not datos.get("registro") or not re.search(r"\d{6,}", datos["registro"]):
-            continue
+        acciones = []
+        for fila in re.findall(r"<tr[^>]*>(.*?)</tr>", tabla, re.S):
+            if "<td" not in fila:
+                continue
+            celdas = _celdas(fila)
+            if len(celdas) <= max(mapa.values()):
+                continue
 
-        deposito = datos["fecha_deposito"]
-        efectos = re.search(r"Efectos del Dep[oó]sito:\s*([0-9/]+)", deposito)
-        datos["fecha_efectos"] = efectos.group(1) if efectos else ""
-        datos["fecha_deposito"] = deposito.split("Efectos")[0].strip()
+            datos = {
+                clave: celdas[indice]
+                for clave, indice in mapa.items()
+                if indice < len(celdas)
+            }
+            if not re.search(r"\d{6,}", datos.get("registro", "")):
+                continue
 
-        datos["dias_restantes"] = _dias_hasta(datos.get("fecha_limite", ""))
-        acciones.append(datos)
-    return acciones
+            deposito = datos.get("fecha_deposito", "")
+            efectos = re.search(r"Efectos del Dep[oó]sito:\s*([0-9/]+)", deposito)
+            datos["fecha_efectos"] = efectos.group(1) if efectos else ""
+            datos["fecha_deposito"] = deposito.split("Efectos")[0].strip()
+            datos["dias_restantes"] = _dias_hasta(datos.get("fecha_limite", ""))
+            acciones.append(datos)
+
+        if acciones:
+            return acciones
+    return []
 
 
 def leer_buzon_sunafil(ruc, usuario, clave):
