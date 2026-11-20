@@ -426,3 +426,17 @@ test('no se puede probar la fuente de una empresa ajena', function () {
 
     Http::assertNothingSent();
 });
+
+test('probar la fuente con el puente caído no filtra detalles de cURL', function () {
+    $this->company->update(['buzon_sunat_endpoint' => 'http://127.0.0.1:9/buzon']);
+
+    $respuesta = $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/probar-fuente', ['company_id' => $this->company->id])
+        ->assertStatus(502)
+        ->assertJsonPath('conectado', false);
+
+    $mensaje = $respuesta->json('message');
+    expect($mensaje)->not->toContain('cURL error');
+    expect($mensaje)->not->toContain('libcurl');
+    expect($mensaje)->toContain('puente');
+});

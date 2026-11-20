@@ -205,8 +205,14 @@ class BuzonService
 
         try {
             $items = $this->consultar($company, $entidad, $endpoint);
-        } catch (\Throwable $e) {
+        } catch (\RuntimeException $e) {
             return ['conectado' => false, 'total' => 0, 'message' => $e->getMessage()];
+        } catch (\Illuminate\Http\Client\ConnectionException) {
+            return [
+                'conectado' => false,
+                'total' => 0,
+                'message' => "No se pudo llegar al endpoint {$entidad}. Revisa que el puente esté levantado y que la URL sea correcta.",
+            ];
         }
 
         return [
