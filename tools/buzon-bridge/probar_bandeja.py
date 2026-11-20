@@ -146,46 +146,42 @@ def main():
 
     def preparar():
         _, inicio = sesion.get(destino)
-        return puente._viewstate(inicio), puente._boton_de_menu(inicio, ETIQUETA)
+        campos = puente._campos_ocultos(inicio, "formMenu2")
+        boton = puente._boton_de_menu(inicio, ETIQUETA)
+        return campos, boton
 
     print(f"\n{'=' * 72}\nPRUEBAS\n{'=' * 72}")
 
-    # 1. POST de formulario completo, que ya sabemos que no navega.
+    # 1. POST con el formulario completo, como hace `submitForm`.
     try:
-        vista, boton = preparar()
-        _, html = sesion.post(
-            destino, {"formMenu2": "formMenu2", boton: boton,
-                      "javax.faces.ViewState": vista}
-        )
-        _resumen("1) POST de formulario normal", html, carpeta)
+        campos, boton = preparar()
+        campos[boton] = boton
+        _, html = sesion.post(destino, campos)
+        _resumen("1) POST de formulario completo", html, carpeta)
     except puente.SolError as e:
         print(f"1) falló: {e.mensaje}")
 
     # 2. POST parcial de JSF con source/execute/render, como PrimeFaces.
     try:
-        vista, boton = preparar()
-        _, html = sesion.post_ajax(
-            destino,
+        campos, boton = preparar()
+        campos.update(
             {
                 "javax.faces.source": boton,
                 "javax.faces.partial.execute": boton,
                 "javax.faces.partial.render": "@all",
-                "formMenu2": "formMenu2",
                 boton: boton,
-                "javax.faces.ViewState": vista,
-            },
+            }
         )
+        _, html = sesion.post_ajax(destino, campos)
         _resumen("2) POST parcial (source/execute/render)", html, carpeta)
     except puente.SolError as e:
         print(f"2) falló: {e.mensaje}")
 
     # 3. POST parcial mínimo, por si el servidor solo mira la cabecera.
     try:
-        vista, boton = preparar()
+        campos, boton = preparar()
         _, html = sesion.post_ajax(
-            destino,
-            {"formMenu2": "formMenu2", boton: boton,
-             "javax.faces.ViewState": vista},
+            destino, {boton: boton, "javax.faces.ViewState": campos["javax.faces.ViewState"]}
         )
         _resumen("3) POST parcial mínimo", html, carpeta)
     except puente.SolError as e:

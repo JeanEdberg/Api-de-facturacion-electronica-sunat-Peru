@@ -492,7 +492,9 @@ class AbrirBandejaSunafilTest(unittest.TestCase):
 
     INICIO = """
     <form id="formMenu2" action="/si.inbox/Inicio/Empleador">
+    <input type="hidden" name="formMenu2" value="formMenu2" />
     <input type="hidden" name="javax.faces.ViewState" value="VS:1" />
+    <input type="hidden" name="javax.faces.ClientWindow" value="CW:9" />
     <li><span id="formMenu2:a:0">P&aacute;gina de inicio</span></li>
     <li><span id="formMenu2:a:1">Notificaciones de Fiscalizaci&oacute;n</span></li>
     <li><span id="formMenu2:a:2">Notificaciones de Cobranza</span></li>
@@ -526,6 +528,30 @@ class AbrirBandejaSunafilTest(unittest.TestCase):
         self.assertEqual(datos["javax.faces.ViewState"], "VS:1")
         self.assertEqual(datos["formMenu2:a:2"], "formMenu2:a:2")
         self.assertEqual(datos["formMenu2"], "formMenu2")
+
+    def test_envia_todos_los_ocultos_no_solo_el_viewstate(self):
+        """JSF puede exigir ClientWindow; el navegador manda el form entero."""
+        sesion = mock.Mock()
+        sesion.get.return_value = ("url", self.INICIO)
+        sesion.post.return_value = ("url", "<html/>")
+
+        puente.abrir_bandeja_sunafil(sesion)
+
+        datos = sesion.post.call_args[0][1]
+        self.assertEqual(datos["javax.faces.ClientWindow"], "CW:9")
+
+    def test_la_variante_parcial_usa_post_ajax(self):
+        sesion = mock.Mock()
+        sesion.get.return_value = ("url", self.INICIO)
+        sesion.post_ajax.return_value = ("url", "<html/>")
+
+        puente.abrir_bandeja_sunafil(sesion, parcial=True)
+
+        sesion.post_ajax.assert_called_once()
+        sesion.post.assert_not_called()
+        datos = sesion.post_ajax.call_args[0][1]
+        self.assertEqual(datos["javax.faces.source"], "formMenu2:a:1")
+        self.assertEqual(datos["javax.faces.partial.execute"], "formMenu2:a:1")
 
     def test_por_defecto_abre_la_bandeja_de_fiscalizacion(self):
         sesion = mock.Mock()

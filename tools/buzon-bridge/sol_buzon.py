@@ -699,23 +699,63 @@ def _boton_de_menu(html_casilla, etiqueta):
     )
 
 
-def abrir_bandeja_sunafil(sesion, etiqueta="Notificaciones de Fiscalización"):
-    """Abre una bandeja del menú de la casilla y devuelve su HTML.
+def _campos_ocultos(html_casilla, id_formulario):
+    """Todos los `<input type="hidden">` de un formulario.
 
-    La casilla es JSF con PrimeFaces: no hay ruta GET para la bandeja, se pide
-    por POST con el ViewState y el id del botón del menú.
+    El navegador envía el formulario entero, no solo el botón: JSF puede exigir
+    campos que no se ven en el HTML a primera vista, como
+    `javax.faces.ClientWindow`. Enviarlos todos es lo más fiel.
+    """
+    bloque = None
+    for trozo in re.split(r"(?=<form\b)", html_casilla)[1:]:
+        ident = re.search(r'<form[^>]*\bid="([^"]+)"', trozo)
+        if ident and ident.group(1) == id_formulario:
+            bloque = trozo.split("</form>")[0]
+            break
+    if bloque is None:
+        raise SolError(
+            f"La casilla no tiene el formulario «{id_formulario}». "
+            "Puede que la pantalla haya cambiado.",
+            detalle=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_casilla))[:400],
+        )
+
+    campos = {}
+    for etiqueta in re.findall(r"<input\b[^>]*>", bloque):
+        if "hidden" not in etiqueta:
+            continue
+        nombre = re.search(r'\bname="([^"]*)"', etiqueta)
+        valor = re.search(r'\bvalue="([^"]*)"', etiqueta)
+        if nombre:
+            campos[unescape(nombre.group(1))] = (
+                unescape(valor.group(1)) if valor else ""
+            )
+    return campos
+
+
+def abrir_bandeja_sunafil(
+    sesion, etiqueta="Notificaciones de Fiscalización", parcial=False
+):
+    """Abre una bandeja del menú de la casilla y devuelve la respuesta.
+
+    La casilla es JSF con PrimeFaces: no hay ruta GET para la bandeja. Se pide
+    por POST con el formulario del menú completo y el botón pulsado.
     """
     _, inicio = sesion.get(f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador")
-    vista = _viewstate(inicio)
     boton = _boton_de_menu(inicio, etiqueta)
-    _, html = sesion.post(
-        f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador",
-        {
-            "formMenu2": "formMenu2",
-            boton: boton,
-            "javax.faces.ViewState": vista,
-        },
-    )
+    datos = _campos_ocultos(inicio, "formMenu2")
+    datos[boton] = boton
+    url = f"{URL_CASILLA_SUNAFIL}/si.inbox/Inicio/Empleador"
+    if parcial:
+        datos.update(
+            {
+                "javax.faces.source": boton,
+                "javax.faces.partial.execute": boton,
+                "javax.faces.partial.render": "@all",
+            }
+        )
+        _, html = sesion.post_ajax(url, datos)
+    else:
+        _, html = sesion.post(url, datos)
     return html
 
 
