@@ -1531,16 +1531,83 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
     else:
         _, cabeceras, contenido = sesion.post_crudo(url_bandeja, datos)
 
-    tipo_respuesta = (cabeceras.get("Content-Type") or "").lower()
-    if "html" in tipo_respuesta or contenido[:15].lstrip().lower().startswith(b"<!doctype"):
-        raise SolError(
-            "SUNAFIL devolvió una página en vez del documento. Suele ser la "
-            "sesión caducada o un botón que ya no está disponible.",
-            detalle=_resumen_pagina(contenido.decode("utf-8", "ignore")),
-        )
+    if _es_pdf(contenido):
+        nombre = _nombre_de_cabecera(cabeceras.get("Content-Disposition", ""))
+        return nombre or f"{tipo}.pdf", contenido
 
+    # No es un PDF. La carta abre un visor: SUNAFIL responde la vista del
+    # documento y la descarga real es otra petición. Se busca esa dirección en
+    # lo que llegó antes de rendirse.
+    destino = _url_de_documento(contenido, cabeceras)
+    if destino:
+        url_doc = urllib.parse.urljoin(url_bandeja, destino)
+        _, cab2, contenido2 = sesion.get_crudo(url_doc)
+        if _es_pdf(contenido2):
+            nombre = _nombre_de_cabecera(cab2.get("Content-Disposition", ""))
+            return nombre or f"{tipo}.pdf", contenido2
+
+    # Se guarda la respuesta cruda: es lo único que dice qué contestó SUNAFIL
+    # cuando no fue el archivo, y sin ella sólo se puede adivinar.
+    carpeta = os.environ.get("BUZON_GUARDAR")
+    if carpeta:
+        ruta = os.path.join(carpeta, f"respuesta-{tipo}.bin")
+        try:
+            with open(ruta, "wb") as f:
+                f.write(contenido)
+        except OSError:
+            ruta = ""
+
+    raise SolError(
+        f"SUNAFIL respondió algo que no es un PDF ({len(contenido)} bytes, "
+        f"{cabeceras.get('Content-Type') or 'sin tipo'}). Suele pasar con la "
+        "carta, que se abre en un visor antes de descargarse."
+        + (f" Respuesta guardada en {ruta}." if carpeta else ""),
+        detalle=_resumen_pagina(contenido.decode("utf-8", "ignore")),
+    )
+
+
+def _es_pdf(contenido):
+    """True si los bytes son un PDF de verdad, no una página disfrazada."""
+    return contenido[:5].lstrip() == b"%PDF-"
+
+
+# Marcas de la vista del documento. Si la respuesta las trae, la descarga es
+# otra petición y hay que sacar su dirección de aquí.
+MARCAS_VISOR = ("visor", "embed", "iframe", "pdfjs", "reportviewer", "jasper")
+
+
+def _url_de_documento(contenido, cabeceras):
+    """Dirección del archivo real dentro de una vista de visor.
+
+    Se buscan primero los enlaces con pinta de descarga y, si no hay, un
+    `iframe`/`embed`/`object` con un `src` que no sea una página del menú.
+    Devuelve la ruta o `None`; nunca inventa una.
+    """
+    texto = contenido.decode("utf-8", "ignore")
+
+    for href in re.findall(r"""\b(?:src|href|data)\s*=\s*["']([^"']+)["']""", texto, re.I):
+        if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+            continue
+        if re.search(r"\.pdf(\?|$)", href, re.I):
+            return unescape(href)
+
+    for etiqueta in ("iframe", "embed", "object"):
+        for bloque in re.findall(rf"<{etiqueta}\b[^>]*>", texto, re.I):
+            src = re.search(r"""\b(?:src|data)\s*=\s*["']([^"']+)["']""", bloque, re.I)
+            if not src:
+                continue
+            valor = unescape(src.group(1))
+            if any(marca in valor.lower() for marca in MARCAS_VISOR):
+                return valor
+            if "servlet" in valor.lower() or "descarg" in valor.lower():
+                return valor
+
+    # Algunas veces el nombre del archivo llega sólo en la cabecera y el visor
+    # pide el documento por un servlet con ese nombre.
     nombre = _nombre_de_cabecera(cabeceras.get("Content-Disposition", ""))
-    return nombre or f"{tipo}.pdf", contenido
+    if nombre and nombre.lower().endswith(".pdf"):
+        return nombre
+    return None
 
 
 def _nombre_de_cabecera(valor):

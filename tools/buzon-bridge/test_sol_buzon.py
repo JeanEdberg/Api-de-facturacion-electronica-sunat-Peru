@@ -588,7 +588,7 @@ class DescargarDocumentoTest(unittest.TestCase):
         with self.assertRaises(puente.SolError) as ctx:
             self._descargar()
 
-        self.assertIn("página en vez del documento", ctx.exception.mensaje)
+        self.assertIn("no es un PDF", ctx.exception.mensaje)
 
     def test_pedir_un_documento_que_la_fila_no_ofrece(self):
         with self.assertRaises(puente.SolError) as ctx:
@@ -636,6 +636,29 @@ class DescargarDocumentoTest(unittest.TestCase):
 
         self.sesion.post_crudo.assert_called_once()
         self.sesion.post_ajax_crudo.assert_not_called()
+
+    def test_sigue_el_visor_hasta_el_pdf_real(self):
+        """La carta abre un visor: hay que pedir el archivo que indica."""
+        visor = (
+            '<html><body><iframe src="/si.inbox/visor/documento?uuid=ABC"></iframe>'
+            "</body></html>"
+        )
+        self.sesion.post_ajax_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "text/html"}, visor.encode())
+        )
+        self.sesion.get_crudo = mock.Mock(
+            return_value=(
+                "u",
+                {"Content-Type": "application/pdf",
+                 "Content-Disposition": 'attachment; filename="carta.pdf"'},
+                b"%PDF-1.4 real",
+            )
+        )
+        nombre, contenido = self._descargar(tipo="carta", botones=BOTON_CARTA)
+
+        self.assertEqual(nombre, "carta.pdf")
+        self.assertTrue(contenido.startswith(b"%PDF"))
+        self.assertIn("visor/documento", self.sesion.get_crudo.call_args[0][0])
 
     def test_el_post_va_a_la_url_de_la_bandeja_no_a_la_de_inicio(self):
         """Enviarlo a /Inicio/Empleador devolvía la página de bienvenida."""
