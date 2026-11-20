@@ -44,6 +44,18 @@ Login de los usuarios seed: `POST /api/auth/login` (**sin** `v1`), token en
 - **`notificaciones.fecha` es DATE.** Hay que convertir las fechas de SUNAT
   (`dd/mm/yyyy hh:mm:ss`) a `yyyy-mm-dd` antes de insertar.
 
+- **SUNAFIL es otro sistema, no otro buzón de SUNAT.** Su casilla está en
+  `casillaelectronica.sunafil.gob.pe/si.inbox/Login/SUNAT`. Esa ruta sugiere
+  que se entra con la misma Clave SOL, pero **el host no responde desde este
+  servidor** (timeout en el puerto 443, comprobado). Por eso `sol_buzon.py`
+  rechaza `entidad != "SUNAT"`: antes devolvía el buzón de SUNAT etiquetado
+  como SUNAFIL, que es peor que un error.
+- **Los buzones se sincronizan por separado.** `POST /notificaciones/sincronizar`
+  acepta `entidad` para consultar solo ese buzón. Sin el parámetro consulta
+  todas las fuentes configuradas.
+- **El puente tarda ~25-45 s** en leer el buzón completo. El timeout HTTP del
+  backend es de 120 s a propósito; bajarlo produce 502 falsos.
+
 ## Secretos
 
 `clave_sol` y `buzon_token` van cifrados en `companies` (cast `encrypted`).
