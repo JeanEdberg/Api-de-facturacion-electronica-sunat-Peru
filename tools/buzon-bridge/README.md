@@ -146,6 +146,22 @@ captcha, hay que esperar a que caduque antes de volver a probar.
 
 `/salud` informa `sunat_alcanzable` y `sunafil_alcanzable` por separado: son
 hosts distintos y el de SUNAFIL suele estar inaccesible desde fuera de Perú.
+Incluye además `sunafil_tls`, que dice qué configuración TLS negoció (o por qué
+no lo consiguió).
+
+### El TLS antiguo de SUNAFIL
+
+La casilla corre sobre un Tomcat viejo (`Apache-Coyote/1.1`) que solo negocia
+cifrados que OpenSSL 3 ya no ofrece a su nivel por defecto. Con Python 3.13+ la
+conexión falla con `SSLV3_ALERT_HANDSHAKE_FAILURE` aunque el host esté
+accesible y `curl` funcione.
+
+`detectar_contexto_tls()` prueba varias configuraciones en orden —por defecto,
+`SECLEVEL=1`, `SECLEVEL=0` y `SECLEVEL=0` con TLS 1.0— y usa la primera que
+negocie. Se aplica **solo a la sesión de SUNAFIL**: el Menú SOL de SUNAT sigue
+usando el contexto por defecto, y la verificación de certificados nunca se
+desactiva. Los grabadores de tráfico deben registrarse con
+`Sesion.agregar_handler()`, porque `usar_tls()` reconstruye el opener.
 
 ### Estado de la lectura de SUNAFIL
 

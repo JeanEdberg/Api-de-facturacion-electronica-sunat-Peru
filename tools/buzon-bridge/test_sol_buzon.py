@@ -16,6 +16,14 @@ import sol_buzon as puente
 
 
 class AutenticarSunafilTest(unittest.TestCase):
+    def setUp(self):
+        # La detección TLS abre un socket real; en los tests se da por resuelta.
+        parche = mock.patch.object(
+            puente, "detectar_contexto_tls", return_value=(None, "por defecto")
+        )
+        parche.start()
+        self.addCleanup(parche.stop)
+
     def _respuesta(self, url_login, destino):
         """Simula `Sesion.get` y `_leer_redireccion` del flujo real."""
         get = mock.Mock(return_value=(url_login, "<html>login</html>"))
@@ -131,7 +139,9 @@ class LeerBuzonSunafilTest(unittest.TestCase):
     def test_si_la_casilla_no_responde_lo_dice_en_vez_de_devolver_vacio(self):
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("code", "state")
-        ), mock.patch.object(puente, "_sondear_sunafil", return_value=False):
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(False, "sin conexión")
+        ):
             with self.assertRaises(puente.SolError) as ctx:
                 puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
 
@@ -142,7 +152,9 @@ class LeerBuzonSunafilTest(unittest.TestCase):
     def test_si_la_casilla_responde_pero_falta_la_bandeja_lo_avisa(self):
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("code", "state")
-        ), mock.patch.object(puente, "_sondear_sunafil", return_value=True):
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(True, "por defecto")
+        ):
             with self.assertRaises(puente.SolError) as ctx:
                 puente.leer_buzon_sunafil("20614684772", "MODDATOS", "clave")
 
@@ -231,6 +243,162 @@ class GrabadorTest(unittest.TestCase):
         self.assertTrue(archivos[0].endswith(".json"))
         with open(os.path.join(carpeta, archivos[0]), "rb") as f:
             self.assertEqual(f.read(), b'{"rows": [1, 2]}')
+
+
+class DetectarContextoTlsTest(unittest.TestCase):
+    """El Tomcat de SUNAFIL falla a SECLEVEL=2; hay que bajar de nivel."""
+
+    def _simular(self, resultados):
+        """`resultados`: lista de excepciones o None por cada estrategia."""
+        intentos = []
+
+        def create_connection(*a, **k):
+            return mock.MagicMock()
+
+        def wrap(*args, **kwargs):
+            resultado = resultados[len(intentos)]
+            intentos.append(resultado)
+            if resultado is not None:
+                raise resultado
+            tls = mock.MagicMock()
+            tls.__enter__ = mock.Mock(return_value=tls)
+            tls.__exit__ = mock.Mock(return_value=False)
+            return tls
+
+        return create_connection, wrap, intentos
+
+    def test_usa_la_primera_configuracion_que_negocia(self):
+        import ssl as _ssl
+
+        fallo = _ssl.SSLError(1, "HANDSHAKE_FAILURE")
+        create, wrap, intentos = self._simular([fallo, None])
+
+        with mock.patch.object(puente.socket, "create_connection", create), \
+             mock.patch.object(puente.ssl.SSLContext, "wrap_socket", wrap):
+            contexto, nombre = puente.detectar_contexto_tls("casilla.test")
+
+        self.assertEqual(nombre, "SECLEVEL=1")
+        self.assertEqual(len(intentos), 2)
+
+    def test_usa_el_primero_cuando_negocia_a_la_primera(self):
+        create, wrap, intentos = self._simular([None])
+
+        with mock.patch.object(puente.socket, "create_connection", create), \
+             mock.patch.object(puente.ssl.SSLContext, "wrap_socket", wrap):
+            _, nombre = puente.detectar_contexto_tls("casilla.test")
+
+        self.assertEqual(nombre, "por defecto")
+        self.assertEqual(len(intentos), 1)
+
+    def test_falla_explicando_si_ninguna_negocia(self):
+        import ssl as _ssl
+
+        fallo = _ssl.SSLError(1, "HANDSHAKE_FAILURE")
+        create, wrap, _ = self._simular([fallo] * len(puente.ESTRATEGIAS_TLS))
+
+        with mock.patch.object(puente.socket, "create_connection", create), \
+             mock.patch.object(puente.ssl.SSLContext, "wrap_socket", wrap):
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.detectar_contexto_tls("casilla.test")
+
+        self.assertIn("TLS", ctx.exception.mensaje)
+        self.assertIn("SECLEVEL", ctx.exception.detalle)
+
+    def test_distingue_no_llegar_de_no_negociar(self):
+        def create(*a, **k):
+            raise OSError("timed out")
+
+        with mock.patch.object(puente.socket, "create_connection", create):
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.detectar_contexto_tls("casilla.test")
+
+        self.assertIn("No se pudo conectar", ctx.exception.mensaje)
+        self.assertIn("timed out", ctx.exception.detalle)
+
+
+class SesionTlsTest(unittest.TestCase):
+    """urllib se queda con el primer HTTPSHandler: hay que reconstruir el opener."""
+
+    def test_el_contexto_personalizado_queda_activo(self):
+        contexto = puente._contexto_tls("DEFAULT@SECLEVEL=1")
+        sesion = puente.Sesion(tls=contexto)
+
+        https = sesion.opener.handle_open["https"]
+        self.assertEqual(len(https), 1)
+        self.assertIs(https[0]._context, contexto)
+
+    def test_usar_tls_reemplaza_el_contexto_sin_perder_cookies(self):
+        import http.cookiejar
+
+        sesion = puente.Sesion()
+        sesion.cookies.set_cookie(
+            http.cookiejar.Cookie(
+                0, "JSESSIONID", "abc", None, False, "casilla.test", False, False,
+                "/", True, False, None, False, None, None, {},
+            )
+        )
+        contexto = puente._contexto_tls("DEFAULT@SECLEVEL=0")
+        sesion.usar_tls(contexto)
+
+        https = sesion.opener.handle_open["https"]
+        self.assertEqual(len(https), 1)
+        self.assertIs(https[0]._context, contexto)
+        self.assertEqual(len(sesion.cookies), 1)
+
+    def test_una_sesion_normal_no_toca_el_tls_de_sunat(self):
+        self.assertIsNone(puente.Sesion().tls)
+
+    def test_el_grabador_sobrevive_al_cambio_de_tls(self):
+        """Sin esto la captura saldría vacía: usar_tls reconstruye el opener."""
+        import capturar_sunafil as captura
+
+        grabador = captura.Grabador("/tmp")
+        sesion = puente.Sesion()
+        sesion.agregar_handler(grabador)
+
+        sesion.usar_tls(puente._contexto_tls("DEFAULT@SECLEVEL=1"))
+
+        self.assertTrue(any(h is grabador for h in sesion.opener.handlers))
+
+
+class SondearSunafilTest(unittest.TestCase):
+    """`_sondear_sunafil` devuelve (alcanzable, tls); una tupla siempre es truthy."""
+
+    def test_informa_no_alcanzable_cuando_no_hay_conexion(self):
+        with mock.patch.object(
+            puente.socket, "create_connection", side_effect=OSError("timed out")
+        ):
+            alcanzable, detalle = puente._sondear_sunafil()
+
+        self.assertFalse(alcanzable)
+        self.assertIn("sin conexión", detalle)
+
+    def test_informa_alcanzable_y_el_tls_negociado(self):
+        conexion = mock.MagicMock()
+        conexion.__enter__ = mock.Mock(return_value=conexion)
+        conexion.__exit__ = mock.Mock(return_value=False)
+
+        with mock.patch.object(
+            puente.socket, "create_connection", return_value=conexion
+        ), mock.patch.object(
+            puente, "detectar_contexto_tls", return_value=(None, "SECLEVEL=1")
+        ):
+            alcanzable, detalle = puente._sondear_sunafil()
+
+        self.assertTrue(alcanzable)
+        self.assertEqual(detalle, "SECLEVEL=1")
+
+    def test_leer_buzon_sunafil_falla_si_la_casilla_no_responde(self):
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("code", "s")
+        ), mock.patch.object(
+            puente, "_sondear_sunafil", return_value=(False, "sin conexión")
+        ):
+            with self.assertRaises(puente.SolError) as ctx:
+                puente.leer_buzon_sunafil("20614684772", "APIINMOA", "clave")
+
+        self.assertIn("no responde", ctx.exception.mensaje)
+        self.assertEqual(ctx.exception.detalle, "sin conexión")
 
 
 if __name__ == "__main__":

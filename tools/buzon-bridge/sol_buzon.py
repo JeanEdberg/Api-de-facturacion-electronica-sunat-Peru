@@ -62,10 +62,12 @@ import json
 import os
 import re
 import socket
+import ssl
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from datetime import datetime
 from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -102,6 +104,66 @@ RUTA_REDIRECT_SUNAFIL = "/si.inbox/Login/Empresa"
 # la conexión: deja las peticiones colgadas hasta el timeout. Se sondea corto.
 TIEMPO_SONDA = 5
 
+# El Tomcat de SUNAFIL (Apache-Coyote/1.1) es antiguo y con OpenSSL 3 falla la
+# negociación a SECLEVEL=2: el servidor responde SSLV3_ALERT_HANDSHAKE_FAILURE.
+# Se prueban en orden hasta dar con la que negocia, y solo para este host: el
+# Menú SOL de SUNAT sigue usando el contexto por defecto.
+ESTRATEGIAS_TLS = (
+    ("por defecto", None, None),
+    ("SECLEVEL=1", "DEFAULT@SECLEVEL=1", None),
+    ("SECLEVEL=0", "DEFAULT@SECLEVEL=0", None),
+    ("SECLEVEL=0 + TLS1.0", "DEFAULT@SECLEVEL=0", "TLSv1"),
+)
+
+
+def _contexto_tls(cifrados=None, minimo=None):
+    """Contexto TLS para hablar con la casilla de SUNAFIL."""
+    contexto = ssl.create_default_context()
+    if cifrados:
+        try:
+            contexto.set_ciphers(cifrados)
+        except ssl.SSLError:
+            pass
+    if minimo:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                contexto.minimum_version = getattr(ssl.TLSVersion, minimo)
+        except (AttributeError, ValueError):
+            pass
+    return contexto
+
+
+def detectar_contexto_tls(host, puerto=443, timeout=TIEMPO_SONDA):
+    """Devuelve `(contexto, nombre)` de la primera configuración que negocia.
+
+    Se prueba un saludo TLS real contra el host. Si todas fallan, se lanza
+    `SolError` con el detalle de cada intento: distinguir "no llego" de "no
+    negocio TLS" ahorra diagnosticar a ciegas.
+    """
+    fallos = []
+    for nombre, cifrados, minimo in ESTRATEGIAS_TLS:
+        contexto = _contexto_tls(cifrados, minimo)
+        try:
+            with socket.create_connection((host, puerto), timeout=timeout) as crudo:
+                with contexto.wrap_socket(crudo, server_hostname=host) as tls:
+                    tls.version()
+            return contexto, nombre
+        except ssl.SSLError as e:
+            motivo = getattr(e, "reason", None) or str(e)
+            fallos.append(f"{nombre}: TLS {motivo}")
+        except OSError as e:
+            raise SolError(
+                f"No se pudo conectar con {host}. Comprueba que este servidor "
+                "tiene salida a internet hacia ese host.",
+                detalle=str(e),
+            )
+    raise SolError(
+        f"El servidor de {host} rechaza todas las configuraciones TLS que "
+        "probó el puente. Suele indicar que el host cambió su configuración.",
+        detalle=" | ".join(fallos),
+    )
+
 
 class SolError(Exception):
     """Fallo al hablar con SUNAT.
@@ -119,17 +181,44 @@ class SolError(Exception):
 class Sesion:
     """Sesión HTTP con cookies contra el Menú SOL."""
 
-    def __init__(self, timeout=60):
+    def __init__(self, timeout=60, tls=None, extras=None):
         self.timeout = timeout
+        self.tls = tls
+        self.extras = list(extras or ())
         self.cookies = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(self.cookies)
-        )
+        self._construir_opener()
+
+    def _construir_opener(self):
+        """Arma el opener con el contexto TLS vigente.
+
+        `add_handler` no sirve aquí: urllib se queda con el primer
+        `HTTPSHandler` de la cadena y el que trae `build_opener` por defecto va
+        delante, así que el contexto personalizado se ignoraría en silencio.
+        """
+        manejadores = [urllib.request.HTTPCookieProcessor(self.cookies)]
+        if self.tls is not None:
+            manejadores.append(urllib.request.HTTPSHandler(context=self.tls))
+        manejadores.extend(self.extras)
+        self.opener = urllib.request.build_opener(*manejadores)
         self.opener.addheaders = [
             ("User-Agent", NAVEGADOR),
             ("Accept-Language", "es-PE,es;q=0.9"),
             ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
         ]
+
+    def usar_tls(self, contexto):
+        """Cambia el contexto TLS conservando cookies y handlers extra."""
+        self.tls = contexto
+        self._construir_opener()
+
+    def agregar_handler(self, handler):
+        """Añade un handler que sobrevive a los cambios de TLS.
+
+        Los grabadores de tráfico deben registrarse así: `usar_tls` reconstruye
+        el opener, y un handler añadido a mano se perdería sin avisar.
+        """
+        self.extras.append(handler)
+        self.opener.add_handler(handler)
 
     def get(self, url):
         try:
@@ -434,14 +523,37 @@ def autenticar_sunafil(ruc, usuario, clave, sesion=None):
     """
     sesion = sesion or Sesion()
 
+    # El Tomcat de SUNAFIL puede exigir cifrados que OpenSSL 3 ya no negocia a
+    # SECLEVEL=2. Se busca una configuración válida antes de seguir.
+    if sesion.tls is None:
+        host = urllib.parse.urlparse(URL_CASILLA_SUNAFIL).hostname
+        try:
+            sesion.tls, _ = detectar_contexto_tls(host, timeout=sesion.timeout)
+        except SolError as e:
+            raise SolError(
+                "La casilla de SUNAFIL no acepta ninguna configuración TLS de "
+                "las que probó el puente. El servidor es antiguo y esta versión "
+                "de Python ya no ofrece sus cifrados por defecto.",
+                detalle=e.detalle,
+            )
+        sesion.usar_tls(sesion.tls)
+
     # 1. La casilla deja su JSESSIONID antes de mandar al SSO.
     try:
         sesion.get(f"{URL_CASILLA_SUNAFIL}{RUTA_ENTRADA_SUNAFIL}")
     except SolError as e:
+        detalle = e.detalle or ""
+        if "SSL" in detalle or "TLS" in detalle:
+            raise SolError(
+                "La casilla de SUNAFIL cortó la conexión segura. El servidor es "
+                "antiguo y puede exigir cifrados que esta versión de Python ya "
+                "no negocia.",
+                detalle=detalle,
+            )
         raise SolError(
             "No se pudo abrir la casilla de SUNAFIL. Comprueba que el servidor "
             "del puente tiene acceso a casillaelectronica.sunafil.gob.pe.",
-            detalle=e.detalle,
+            detalle=detalle,
         )
 
     # 2. Seguir el salto al SSO, como hace el navegador.
@@ -503,15 +615,28 @@ def autenticar_sunafil(ruc, usuario, clave, sesion=None):
 
 
 def _sondear_sunafil():
-    """Comprueba si el host de la casilla de SUNAFIL acepta conexión TCP."""
+    """Comprueba si la casilla de SUNAFIL responde y con qué TLS.
+
+    Devuelve `(alcanzable, tls)`: `tls` es el nombre de la configuración que
+    negoció, o el motivo del fallo. Distinguir "no llego" de "no negocio TLS"
+    ahorra diagnosticar a ciegas, que es justo lo que pasó la primera vez.
+    """
     partes = urllib.parse.urlparse(URL_CASILLA_SUNAFIL)
     try:
         with socket.create_connection(
             (partes.hostname, partes.port or 443), timeout=TIEMPO_SONDA
         ):
-            return True
-    except OSError:
-        return False
+            pass
+    except OSError as e:
+        return False, f"sin conexión: {e}"
+
+    try:
+        _, nombre = detectar_contexto_tls(
+            partes.hostname, partes.port or 443, timeout=TIEMPO_SONDA
+        )
+        return True, nombre
+    except SolError as e:
+        return True, f"no negocia TLS: {e.detalle}"
 
 
 def leer_buzon_sunafil(ruc, usuario, clave):
@@ -525,12 +650,13 @@ def leer_buzon_sunafil(ruc, usuario, clave):
     """
     code, state = autenticar_sunafil(ruc, usuario, clave)
 
-    if not _sondear_sunafil():
+    alcanzable, tls = _sondear_sunafil()
+    if not alcanzable:
         raise SolError(
             "La Clave SOL es válida, pero el servidor de la casilla de SUNAFIL "
             "no responde. Comprueba desde un navegador en Perú: si tampoco "
             "carga, el servicio está caído del lado de SUNAFIL.",
-            detalle=f"Sin conexión TCP a {URL_CASILLA_SUNAFIL}",
+            detalle=tls,
         )
 
     raise SolError(
@@ -560,12 +686,14 @@ class Manejador(BaseHTTPRequestHandler):
             sesion = Sesion()
             _, portada = sesion.get(MENU)
             alcanzable = bool(re.search(r'redirect\("([^"]+)"\)', portada))
+            sunda = _sondear_sunafil()
             self._responder(
                 200,
                 {
                     "puente": "ok",
                     "sunat_alcanzable": alcanzable,
-                    "sunafil_alcanzable": _sondear_sunafil(),
+                    "sunafil_alcanzable": sunda[0],
+                    "sunafil_tls": sunda[1],
                     "detalle": "" if alcanzable else portada[:500],
                 },
             )

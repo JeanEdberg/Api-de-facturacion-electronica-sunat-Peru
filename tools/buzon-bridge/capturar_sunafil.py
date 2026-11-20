@@ -95,7 +95,7 @@ def main():
     print(f"\n1. Autenticando {usuario} / RUC {ruc} en el SSO de SUNAT…")
     sesion = puente.Sesion(timeout=60)
     grabador = Grabador(carpeta)
-    sesion.opener.add_handler(grabador)
+    sesion.agregar_handler(grabador)
 
     try:
         code, state = puente.autenticar_sunafil(ruc, usuario, clave, sesion=sesion)
