@@ -93,7 +93,10 @@ URL_VISOR = "https://{sdm}.sunat.gob.pe/ol-ti-itvisornoti/visor"
 URL_SSO = "https://api-seguridad.sunat.gob.pe"
 SUNAFIL_CLIENT_ID = "b6474e23-8a3b-4153-b301-dafcc9646250"
 URL_CASILLA_SUNAFIL = "https://casillaelectronica.sunafil.gob.pe"
-RUTA_LOGIN_SUNAFIL = "/si.inbox/Login/Empresa"
+# Página que arma la URL del SSO. Su JS es la fuente de verdad del flujo.
+RUTA_ENTRADA_SUNAFIL = "/si.inbox/Login/SUNAT"
+# `redirect_uri` que usa esa página: el SSO devuelve el `code` aquí.
+RUTA_REDIRECT_SUNAFIL = "/si.inbox/Login/Empresa"
 
 # El host de la casilla suele estar inaccesible desde fuera de Perú y no corta
 # la conexión: deja las peticiones colgadas hasta el timeout. Se sondea corto.
@@ -389,13 +392,39 @@ def _leer_redireccion(sesion, url, datos):
         raise SolError("El SSO de SUNAT cortó la conexión.", detalle=str(e))
 
 
+def _url_authen_sunafil():
+    """Arma la URL del SSO igual que el JS de `/si.inbox/Login/SUNAT`.
+
+    La página de entrada de la casilla hace `window.location.replace()` a esta
+    URL tras 2 s. Se replica tal cual, incluido `state=s` fijo.
+    """
+    parametros = urllib.parse.urlencode(
+        {
+            "client_id": SUNAFIL_CLIENT_ID,
+            "response_type": "code",
+            "state": "s",
+            "redirect_uri": f"{URL_CASILLA_SUNAFIL}{RUTA_REDIRECT_SUNAFIL}",
+        }
+    )
+    return (
+        f"{URL_SSO}/v1/clientessol/{SUNAFIL_CLIENT_ID}/oauth2/authen?{parametros}"
+    )
+
+
 def autenticar_sunafil(ruc, usuario, clave, sesion=None):
     """Autentica en la casilla de SUNAFIL con la misma Clave SOL de SUNAT.
 
-    SUNAFIL no tiene login propio: `/si.inbox/Login/Empresa` redirige al SSO de
-    SUNAT con el `client_id` de SUNAFIL, que devuelve un `code` OAuth2. El
-    formulario del SSO (`j_security_check`) se envía con `tipo=2`, que es el
-    modo RUC, y los campos `custom_ruc`, `j_username` y `j_password`.
+    El flujo es el del navegador, verificado contra el sistema real:
+
+    1. `GET /si.inbox/Login/SUNAT` deja el `JSESSIONID` de la casilla y
+       devuelve un JS que salta al SSO.
+    2. `GET /v1/clientessol/<cid>/oauth2/authen?…` redirige a `/oauth2/login`,
+       que trae el formulario `j_security_check` y su `state`.
+    3. `POST j_security_check` con `tipo=2` (modo RUC). Credenciales buenas:
+       302 al `redirect_uri` con un `code`. Malas: 302 a `/oauth2/error`.
+
+    Se entra primero a la casilla a propósito: su `JSESSIONID` viaja en la URL
+    (`;jsessionid=`) y sin esa cookie el canje del `code` falla.
 
     Devuelve `(code, state)`. No se sigue la redirección final porque apunta al
     host de la casilla, que puede no ser alcanzable desde este servidor.
@@ -404,10 +433,19 @@ def autenticar_sunafil(ruc, usuario, clave, sesion=None):
     script de captura para entrar a la casilla después del login).
     """
     sesion = sesion or Sesion()
-    url = (
-        f"{URL_SSO}/v1/clientessol/{SUNAFIL_CLIENT_ID}/oauth2/login"
-        f"?originalUrl={URL_CASILLA_SUNAFIL}{RUTA_LOGIN_SUNAFIL}&state=s"
-    )
+
+    # 1. La casilla deja su JSESSIONID antes de mandar al SSO.
+    try:
+        sesion.get(f"{URL_CASILLA_SUNAFIL}{RUTA_ENTRADA_SUNAFIL}")
+    except SolError as e:
+        raise SolError(
+            "No se pudo abrir la casilla de SUNAFIL. Comprueba que el servidor "
+            "del puente tiene acceso a casillaelectronica.sunafil.gob.pe.",
+            detalle=e.detalle,
+        )
+
+    # 2. Seguir el salto al SSO, como hace el navegador.
+    url = _url_authen_sunafil()
     try:
         url_login, _ = sesion.get(url)
     except SolError as e:

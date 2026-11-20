@@ -110,7 +110,7 @@ def main():
 
     print("2. Entrando a la casilla con ese código…")
     entrada = (
-        f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_LOGIN_SUNAFIL}"
+        f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_REDIRECT_SUNAFIL}"
         f"?state={urllib.parse.quote(state)}&code={urllib.parse.quote(code)}"
     )
     try:

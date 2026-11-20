@@ -9,6 +9,7 @@ import io
 import json
 import os
 import unittest
+import urllib.parse
 from unittest import mock
 
 import sol_buzon as puente
@@ -21,14 +22,39 @@ class AutenticarSunafilTest(unittest.TestCase):
         redir = mock.Mock(return_value=(302, destino))
         return get, redir
 
+    def test_entra_a_la_casilla_antes_de_ir_al_sso(self):
+        """El JSESSIONID de la casilla se necesita para canjear el `code`."""
+        login = (
+            f"{puente.URL_SSO}/v1/clientessol/{puente.SUNAFIL_CLIENT_ID}"
+            f"/oauth2/login?originalUrl={puente.URL_CASILLA_SUNAFIL}"
+            f"{puente.RUTA_REDIRECT_SUNAFIL}&state=abc"
+        )
+        destino = (
+            f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_REDIRECT_SUNAFIL}"
+            "?state=abc&code=CODIGO123"
+        )
+        get, redir = self._respuesta(login, destino)
+
+        with mock.patch.object(puente.Sesion, "get", get), mock.patch.object(
+            puente, "_leer_redireccion", redir
+        ):
+            puente.autenticar_sunafil("20614684772", "MODDATOS", "clave")
+
+        primera, segunda = get.call_args_list[0][0][0], get.call_args_list[1][0][0]
+        self.assertEqual(primera, f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_ENTRADA_SUNAFIL}")
+        self.assertIn("/oauth2/authen", segunda)
+        self.assertIn(f"client_id={puente.SUNAFIL_CLIENT_ID}", segunda)
+        self.assertIn("response_type=code", segunda)
+        self.assertIn(urllib.parse.quote(puente.RUTA_REDIRECT_SUNAFIL, safe=""), segunda)
+
     def test_envia_el_formulario_del_sso_con_el_client_id_de_sunafil(self):
         login = (
             f"{puente.URL_SSO}/v1/clientessol/{puente.SUNAFIL_CLIENT_ID}"
             f"/oauth2/login?originalUrl={puente.URL_CASILLA_SUNAFIL}"
-            f"{puente.RUTA_LOGIN_SUNAFIL}&state=abc"
+            f"{puente.RUTA_REDIRECT_SUNAFIL}&state=abc"
         )
         destino = (
-            f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_LOGIN_SUNAFIL}"
+            f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_REDIRECT_SUNAFIL}"
             "?state=abc&code=CODIGO123"
         )
         get, redir = self._respuesta(login, destino)
@@ -41,9 +67,11 @@ class AutenticarSunafilTest(unittest.TestCase):
         self.assertEqual(code, "CODIGO123")
         self.assertEqual(state, "abc")
 
-        url_pedida = get.call_args[0][0]
+        url_pedida = get.call_args_list[1][0][0]
         self.assertIn(puente.SUNAFIL_CLIENT_ID, url_pedida)
-        self.assertIn(puente.URL_CASILLA_SUNAFIL, url_pedida)
+        self.assertIn(
+            urllib.parse.quote(puente.URL_CASILLA_SUNAFIL, safe=""), url_pedida
+        )
 
         datos = redir.call_args[0][2]
         self.assertEqual(datos["tipo"], "2")
@@ -56,7 +84,7 @@ class AutenticarSunafilTest(unittest.TestCase):
         login = (
             f"{puente.URL_SSO}/v1/clientessol/{puente.SUNAFIL_CLIENT_ID}"
             f"/oauth2/login?originalUrl={puente.URL_CASILLA_SUNAFIL}"
-            f"{puente.RUTA_LOGIN_SUNAFIL}&state=abc"
+            f"{puente.RUTA_REDIRECT_SUNAFIL}&state=abc"
         )
         destino = f"{puente.URL_SSO}/v1/clientessol/x/oauth2/error?state=abc"
         get, redir = self._respuesta(login, destino)
@@ -85,9 +113,9 @@ class AutenticarSunafilTest(unittest.TestCase):
         login = (
             f"{puente.URL_SSO}/v1/clientessol/{puente.SUNAFIL_CLIENT_ID}"
             f"/oauth2/login?originalUrl={puente.URL_CASILLA_SUNAFIL}"
-            f"{puente.RUTA_LOGIN_SUNAFIL}&state=abc"
+            f"{puente.RUTA_REDIRECT_SUNAFIL}&state=abc"
         )
-        destino = f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_LOGIN_SUNAFIL}?state=abc"
+        destino = f"{puente.URL_CASILLA_SUNAFIL}{puente.RUTA_REDIRECT_SUNAFIL}?state=abc"
         get, redir = self._respuesta(login, destino)
 
         with mock.patch.object(puente.Sesion, "get", get), mock.patch.object(
