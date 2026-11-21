@@ -660,6 +660,39 @@ class DescargarDocumentoTest(unittest.TestCase):
         self.assertTrue(contenido.startswith(b"%PDF"))
         self.assertIn("visor/documento", self.sesion.get_crudo.call_args[0][0])
 
+    def test_si_el_primero_falla_prueba_el_siguiente(self):
+        """El orden es una preferencia, no una certeza: hay que reintentar."""
+        respuestas = [
+            ("u", {"Content-Type": "text/html"},
+             b"<html>500 Error interno del servidor</html>"),
+            ("u", {"Content-Type": "application/pdf",
+                   "Content-Disposition": 'attachment; filename="carta.pdf"'},
+             b"%PDF-1.4 x"),
+        ]
+        # El primer POST (la carta) va por AJAX y devuelve el diálogo.
+        self.sesion.post_ajax_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "text/xml"}, b"<partial-response/>")
+        )
+        self.sesion.post_crudo = mock.Mock(side_effect=respuestas)
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "_abrir_bandeja",
+            return_value=(
+                "http://casilla/vista",
+                self._acciones(BOTON_CARTA) + DIALOGO_CON_VER_Y_DESCARGAR,
+            ),
+        ):
+            nombre, contenido = puente.descargar_documento(
+                "20614684772", "MODDATOS", "clave", "Acciones Previas", 0, "carta"
+            )
+
+        self.assertEqual(nombre, "carta.pdf")
+        self.assertTrue(contenido.startswith(b"%PDF"))
+        self.assertEqual(self.sesion.post_crudo.call_count, 2)
+        segundo = self.sesion.post_crudo.call_args[0][1]
+        self.assertIn("formDescargaDoc:btnverDocumento", segundo)
+
     def test_el_dialogo_se_busca_tambien_en_la_pagina_de_la_bandeja(self):
         """PrimeFaces deja el diálogo montado: no siempre viene en la respuesta."""
         self.sesion.post_ajax_crudo = mock.Mock(
@@ -727,14 +760,14 @@ class DialogoDescargaTest(unittest.TestCase):
     """La carta abre un diálogo con un segundo botón: ahí está el PDF."""
 
     def test_encuentra_el_boton_descargar_del_dialogo(self):
-        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA.encode())
+        botones = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA.encode())
 
-        self.assertEqual(boton["formulario"], "formDescargaDoc")
-        self.assertEqual(boton["boton"], "formDescargaDoc:j_idt179")
+        self.assertEqual(botones[0]["formulario"], "formDescargaDoc")
+        self.assertEqual(botones[0]["boton"], "formDescargaDoc:j_idt179")
 
     def test_no_confunde_el_boton_cerrar_con_el_de_descargar(self):
-        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
-        self.assertNotIn("Cerrar", boton["boton"])
+        botones = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
+        self.assertNotIn("Cerrar", botones[0]["boton"])
 
     def test_un_boton_deshabilitado_no_sirve(self):
         roto = DIALOGO_DESCARGA.replace(
@@ -744,18 +777,66 @@ class DialogoDescargaTest(unittest.TestCase):
 
     def test_devuelve_el_action_del_formulario(self):
         """El POST debe ir a ListadoRequerimientos, no a la URL de la bandeja."""
-        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
+        botones = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
         self.assertEqual(
-            boton["accion"], "/si.inbox/ActosAdministrativos/ListadoRequerimientos"
+            botones[0]["accion"], "/si.inbox/ActosAdministrativos/ListadoRequerimientos"
         )
 
     def test_el_boton_del_dialogo_no_va_por_ajax(self):
         """monitorDownload es una descarga normal: el navegador recibe el archivo."""
-        boton = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
-        self.assertFalse(boton["ajax"])
+        botones = puente._boton_descarga_en_dialogo(DIALOGO_DESCARGA)
+        self.assertFalse(botones[0]["ajax"])
 
     def test_una_pagina_sin_dialogo_devuelve_none(self):
         self.assertIsNone(puente._boton_descarga_en_dialogo("<html><body>x</body></html>"))
+
+
+DIALOGO_CON_VER_Y_DESCARGAR = (
+    '<div id="dlg"><form id="formDescargaDoc" method="post" '
+    'action="/si.inbox/ActosAdministrativos/ListadoRequerimientos">'
+    '<button type="submit" id="formDescargaDoc:btnverDocumento" '
+    'name="formDescargaDoc:btnverDocumento" onclick="PrimeFaces.monitorDownload(start, stop);">'
+    '<span><i class="fa fa-file-pdf-o"></i></span> Ver Documento</button>'
+    '<button type="submit" id="formDescargaDoc:j_idt179" '
+    'name="formDescargaDoc:j_idt179" onclick="PrimeFaces.monitorDownload(start, stop);">'
+    '<span><i class="fa fa-file-pdf-o"></i></span> Descargar</button>'
+    '<button type="submit" id="formDescargaDoc:j_idt180" '
+    'name="formDescargaDoc:j_idt180" data-dismiss="modal">Cerrar</button>'
+    "</form></div>"
+)
+
+
+class EleccionDelBotonDeDescargaTest(unittest.TestCase):
+    """El diálogo trae «Ver Documento» y «Descargar»: hay que pulsar el segundo.
+
+    Pulsar el de ver abre el visor /jsfDocs/modulos/..., que responde 500.
+    """
+
+    def test_elige_descargar_y_no_ver_documento(self):
+        botones = puente._boton_descarga_en_dialogo(DIALOGO_CON_VER_Y_DESCARGAR)
+
+        self.assertEqual(botones[0]["boton"], "formDescargaDoc:j_idt179")
+        self.assertNotIn("verDocumento", botones[0]["boton"])
+
+    def test_no_confunde_cerrar_con_descargar(self):
+        botones = puente._boton_descarga_en_dialogo(DIALOGO_CON_VER_Y_DESCARGAR)
+        self.assertNotEqual(botones[0]["boton"], "formDescargaDoc:j_idt180")
+
+    def test_si_solo_hay_ver_documento_lo_usa_como_ultimo_recurso(self):
+        """No se descarta: si es el único, se prueba al final."""
+        solo = (
+            '<form id="formDescargaDoc"><button type="submit" '
+            'name="formDescargaDoc:btnverDocumento">Ver Documento</button></form>'
+        )
+        botones = puente._boton_descarga_en_dialogo(solo)
+
+        self.assertEqual(botones[0]["boton"], "formDescargaDoc:btnverDocumento")
+
+    def test_lista_los_botones_para_el_mensaje_de_error(self):
+        nombres = puente._candidatos_de_dialogo(DIALOGO_CON_VER_Y_DESCARGAR)
+
+        self.assertIn("formDescargaDoc:j_idt179", nombres)
+        self.assertEqual(len(nombres), 3)
 
 
 class ViewStateDelDialogoTest(unittest.TestCase):

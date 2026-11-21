@@ -1568,37 +1568,35 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
         boton_dialogo = _boton_descarga_en_dialogo(origen_dialogo)
 
     if boton_dialogo:
-        datos2 = _campos_ocultos(
-            origen_dialogo.decode("utf-8", "ignore"), boton_dialogo["formulario"]
-        )
-        # El ViewState más reciente es el de la última respuesta. Mandar el de
-        # la página anterior hace que JSF rechace la acción y devuelva la
-        # página otra vez, que es exactamente lo que estaba pasando.
-        vs_reciente = _viewstate_opcional(contenido) or _viewstate_opcional(origen_dialogo)
-        if vs_reciente:
-            datos2["javax.faces.ViewState"] = vs_reciente
-        datos2[boton_dialogo["boton"]] = boton_dialogo["boton"]
-        # El POST va al `action` del propio formulario, no a la URL de la
-        # bandeja: JSF necesita la vista del diálogo para ejecutar su acción.
-        url_dialogo = urllib.parse.urljoin(
-            url_bandeja, boton_dialogo["accion"] or url_bandeja
-        )
-        if boton_dialogo.get("ajax"):
-            datos2.update(
-                {
-                    "javax.faces.source": boton_dialogo["boton"],
-                    "javax.faces.partial.execute": boton_dialogo["boton"],
-                    "javax.faces.partial.render": "@all",
-                }
+        # Se prueban todos los botones del diálogo, en orden de preferencia.
+        # Cuál descarga de verdad no se puede saber leyendo el HTML: los dos
+        # llevan el mismo icono y `monitorDownload`. Probarlos es más fiable
+        # que elegir uno y confiar en que sea el bueno.
+        for candidato in boton_dialogo:
+            datos2 = _campos_ocultos(
+                origen_dialogo.decode("utf-8", "ignore"), candidato["formulario"]
             )
-            _, cab3, contenido3 = sesion.post_ajax_crudo(url_dialogo, datos2)
-        else:
+            # El ViewState más reciente es el de la última respuesta: mandar el
+            # de la página anterior hace que JSF rechace la acción.
+            vs_reciente = _viewstate_opcional(contenido) or _viewstate_opcional(
+                origen_dialogo
+            )
+            if vs_reciente:
+                datos2["javax.faces.ViewState"] = vs_reciente
+            datos2[candidato["boton"]] = candidato["boton"]
+            # El POST va al `action` del propio formulario: JSF necesita la
+            # vista del diálogo para ejecutar su acción.
+            url_dialogo = urllib.parse.urljoin(
+                url_bandeja, candidato["accion"] or url_bandeja
+            )
             _, cab3, contenido3 = sesion.post_crudo(url_dialogo, datos2)
-        if _es_pdf(contenido3):
-            nombre = _nombre_de_cabecera(cab3.get("Content-Disposition", ""))
-            return nombre or f"{tipo}.pdf", contenido3
-        # Se conserva la respuesta del diálogo: es la que dice qué falta.
-        contenido, cabeceras = contenido3, cab3
+            if _es_pdf(contenido3):
+                nombre = _nombre_de_cabecera(cab3.get("Content-Disposition", ""))
+                return nombre or f"{tipo}.pdf", contenido3
+            # Se guarda la respuesta que mejor explica el fallo: un 500 o la
+            # página del visor dicen más que un re-render de la bandeja.
+            if _es_mas_util(contenido3, contenido):
+                contenido, cabeceras = contenido3, cab3
 
     # Se guarda siempre la respuesta cruda junto al script: es lo único que
     # dice qué contestó SUNAFIL cuando no fue el archivo, y sin ella sólo se
@@ -1610,13 +1608,18 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
     except OSError:
         ruta = ""
 
+    texto_respuesta = contenido.decode("utf-8", "ignore")
+    botones_vistos = _candidatos_de_dialogo(texto_respuesta)
+
     raise SolError(
         f"SUNAFIL respondió algo que no es un PDF ({len(contenido)} bytes, "
         f"{cabeceras.get('Content-Type') or 'sin tipo'}). Suele pasar con la "
         "carta, que se abre en un visor antes de descargarse."
+        + (f"\n\nBotones que trae la respuesta: {', '.join(botones_vistos)}"
+           if botones_vistos else "")
         + (f"\n\nLa respuesta se guardó en:\n  {ruta}\n"
            f"Analízala con:  python mirar_respuesta.py \"{os.path.basename(ruta)}\"" if ruta else ""),
-        detalle=_resumen_pagina(contenido.decode("utf-8", "ignore")),
+        detalle=_resumen_pagina(texto_respuesta),
     )
 
 
@@ -1663,6 +1666,7 @@ def _boton_descarga_en_dialogo(contenido):
     descarta el que no se puede pulsar.
     """
     texto = contenido.decode("utf-8", "ignore") if isinstance(contenido, bytes) else contenido
+    candidatos = []
 
     for formulario in re.findall(r"""<form[^>]*\bid\s*=\s*["']([^"']*DescargaDoc[^"']*)["']""", texto, re.I):
         bloque = None
@@ -1680,18 +1684,76 @@ def _boton_descarga_en_dialogo(contenido):
             if not nombre or re.search(r"\bdisabled\b", apertura, re.I):
                 continue
             etiqueta = _sin_acentos(_texto_celda(boton))
-            if "descargar" not in etiqueta and "fa-file-pdf" not in boton:
-                continue
+            ident = unescape(nombre.group(1))
             accion = re.search(r"""<form[^>]*\baction\s*=\s*["']([^"']+)["']""", bloque, re.I)
-            return {
-                "formulario": formulario,
-                "boton": unescape(nombre.group(1)),
-                "accion": unescape(accion.group(1)) if accion else "",
-                # `PrimeFaces.monitorDownload` es una descarga normal: el
-                # navegador envía el formulario y recibe el archivo. No es AJAX.
-                "ajax": False,
-            }
-    return None
+            candidatos.append(
+                {
+                    "formulario": formulario,
+                    "boton": ident,
+                    "texto": etiqueta,
+                    "accion": unescape(accion.group(1)) if accion else "",
+                    # `PrimeFaces.monitorDownload` es una descarga normal: el
+                    # navegador envía el formulario y recibe el archivo.
+                    "ajax": False,
+                }
+            )
+
+    return _mejor_descarga(candidatos)
+
+
+def _mejor_descarga(candidatos):
+    """De los botones del diálogo, el que descarga de verdad.
+
+    El diálogo trae varios botones con el mismo icono de PDF: uno «Ver
+    Documento» y otro «Descargar». Pulsar el de ver abre el visor
+    `/jsfDocs/modulos/...` y SUNAFIL responde 500, así que se descarta por su
+    nombre y por su texto antes de elegir.
+    """
+    # Se decide por el texto visible del botón, nunca por su `name`: todos
+    # cuelgan del formulario `formDescargaDoc`, así que el nombre siempre
+    # contiene «descarg» y no distingue «Descargar» de «Cerrar».
+    ordenados = []
+    for c in candidatos:
+        texto = c["texto"]
+        if "cerrar" in texto or "cancelar" in texto or "volver" in texto:
+            continue
+        if "descargar" in texto:
+            ordenados.append((0, c))
+        elif "ver documento" in texto:
+            ordenados.append((2, c))
+        elif not texto:
+            # Sin texto: el icono de PDF es la única pista que queda.
+            ordenados.append((1, c))
+    ordenados.sort(key=lambda par: par[0])
+    return [c for _, c in ordenados] or None
+
+
+def _es_mas_util(nuevo, actual):
+    """True si `nuevo` describe mejor el fallo que `actual`.
+
+    Un error del servidor o la página del visor explican qué pasó; un
+    re-render de la bandeja no dice nada.
+    """
+
+    def valor(datos):
+        if not isinstance(datos, bytes) or not datos:
+            return 0
+        texto = datos.decode("utf-8", "ignore")
+        if re.search(r"Error interno|Error Code: 500|Algo sali[oó] mal", texto, re.I):
+            return 3
+        if "jsfDocs" in texto or "visor" in texto.lower():
+            return 2
+        return 1
+
+    return valor(nuevo) > valor(actual)
+
+
+def _candidatos_de_dialogo(contenido):
+    """Sólo los nombres de los botones del diálogo, para el mensaje de error."""
+    if isinstance(contenido, bytes):
+        contenido = contenido.decode("utf-8", "ignore")
+    nombres = re.findall(r"""<button[^>]*\bname\s*=\s*["']([^"']+)["']""", contenido, re.I)
+    return nombres
 
 
 def _url_de_documento(contenido, cabeceras):
