@@ -42,14 +42,26 @@ class BuzonService
             return Notificacion::create($datos);
         }
 
-        return Notificacion::updateOrCreate(
-            [
-                'company_id' => $datos['company_id'],
-                'entidad' => $datos['entidad'],
-                'codigo' => $datos['codigo'],
-            ],
-            $datos,
-        );
+        $clave = [
+            'company_id' => $datos['company_id'],
+            'entidad' => $datos['entidad'],
+            'codigo' => $datos['codigo'],
+        ];
+
+        // Volver a sincronizar no debe deshacer lo que hizo el usuario: sin
+        // esto, cada sincronización devolvía a «pendiente» las notificaciones
+        // ya leídas y el panel las volvía a marcar como nuevas.
+        $existente = Notificacion::where($clave)->first();
+
+        if ($existente) {
+            unset($datos['estado'], $datos['leida_en']);
+
+            $existente->update($datos);
+
+            return $existente;
+        }
+
+        return Notificacion::create($clave + $datos);
     }
 
     public function marcarLeida(Notificacion $notificacion): Notificacion

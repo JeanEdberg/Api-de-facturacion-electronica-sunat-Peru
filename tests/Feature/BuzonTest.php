@@ -606,3 +606,33 @@ test('no pide el documento si la notificación no dice de qué fila salió', fun
 
     Http::assertNothingSent();
 });
+
+test('re-sincronizar no devuelve a pendiente una notificación ya leída', function () {
+    config()->set('services.buzon.sunat_endpoint', 'https://buzon.test/api/sunat');
+
+    $notificacion = Notificacion::create([
+        'company_id' => $this->company->id,
+        'entidad' => 'SUNAT',
+        'codigo' => 'N-1',
+        'asunto' => 'Esquela',
+        'origen' => 'sincronizada',
+        'estado' => 'leida',
+        'leida_en' => now(),
+    ]);
+
+    Http::fake([
+        'buzon.test/*' => Http::response([
+            'data' => [
+                ['entidad' => 'SUNAT', 'codigo' => 'N-1', 'asunto' => 'Esquela'],
+            ],
+        ]),
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/sincronizar', ['company_id' => $this->company->id])
+        ->assertStatus(200);
+
+    // El usuario ya la había leído: sincronizar no debe deshacer eso.
+    expect($notificacion->refresh()->estado)->toBe('leida');
+    expect($notificacion->refresh()->leida_en)->not->toBeNull();
+});
