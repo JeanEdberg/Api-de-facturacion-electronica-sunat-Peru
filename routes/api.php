@@ -65,6 +65,8 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::post('/auth/create-user', [AuthController::class, 'createUser']);
+    Route::get('/auth/users', [AuthController::class, 'listUsers']);
+    Route::get('/auth/roles', [AuthController::class, 'listRoles']);
     
     // Usuario autenticado
     Route::get('/user', function (Request $request) {

@@ -168,7 +168,11 @@ class AuthController extends Controller
      */
     public function createUser(Request $request)
     {
-        if (!$request->user()->hasRole('super_admin')) {
+        $actor = $request->user();
+        $esSuperAdmin = $actor->hasRole('super_admin');
+        $esAdminEmpresa = $actor->hasRole('company_admin');
+
+        if (!$esSuperAdmin && !$esAdminEmpresa) {
             return response()->json([
                 'message' => 'No tienes permisos para crear usuarios',
                 'status' => 'error'
@@ -183,6 +187,36 @@ class AuthController extends Controller
             'company_id' => 'nullable|integer|exists:companies,id',
             'user_type' => 'required|in:system,user,api_client',
         ]);
+
+        // El admin de empresa sólo puede crear usuarios dentro de su empresa y
+        // sin roles de alcance global (super_admin).
+        if (!$esSuperAdmin) {
+            if (!$actor->company_id) {
+                return response()->json([
+                    'message' => 'Tu usuario no tiene empresa asignada',
+                    'status' => 'error'
+                ], 403);
+            }
+            if ((int) $request->company_id !== (int) $actor->company_id) {
+                return response()->json([
+                    'message' => 'Sólo puedes crear usuarios en tu propia empresa',
+                    'status' => 'error'
+                ], 403);
+            }
+            if ($request->role_name === 'super_admin') {
+                return response()->json([
+                    'message' => 'No puedes asignar el rol super_admin',
+                    'status' => 'error'
+                ], 403);
+            }
+            // api_client y system son cuentas de alcance global, no de empresa.
+            if ($request->user_type !== 'user') {
+                return response()->json([
+                    'message' => 'Sólo puedes crear usuarios de tipo user',
+                    'status' => 'error'
+                ], 403);
+            }
+        }
 
         try {
             $role = Role::where('name', $request->role_name)->first();
@@ -259,5 +293,67 @@ class AuthController extends Controller
         } catch (\Exception $e) {
             return false;
         }
+    }
+
+    /**
+     * Lista los usuarios visibles para el actor autenticado.
+     * super_admin ve todos; company_admin sólo los de su empresa.
+     */
+    public function listUsers(Request $request)
+    {
+        $actor = $request->user();
+
+        if (!$actor->hasRole('super_admin') && !$actor->hasRole('company_admin')) {
+            return response()->json([
+                'message' => 'No tienes permisos para ver usuarios',
+                'status' => 'error'
+            ], 403);
+        }
+
+        $query = User::with('role')->orderBy('name');
+
+        if (!$actor->hasRole('super_admin')) {
+            $query->where('company_id', $actor->company_id);
+        }
+
+        $usuarios = $query->get()->map(fn (User $u) => [
+            'id' => $u->id,
+            'name' => $u->name,
+            'email' => $u->email,
+            'role' => $u->role?->name,
+            'role_label' => $u->role?->display_name,
+            'company_id' => $u->company_id,
+            'user_type' => $u->user_type,
+            'active' => (bool) $u->active,
+            'last_login_at' => $u->last_login_at,
+        ]);
+
+        return response()->json(['items' => $usuarios]);
+    }
+
+    /**
+     * Roles que el actor puede asignar. El admin de empresa no puede repartir
+     * super_admin.
+     */
+    public function listRoles(Request $request)
+    {
+        $actor = $request->user();
+
+        if (!$actor->hasRole('super_admin') && !$actor->hasRole('company_admin')) {
+            return response()->json([
+                'message' => 'No tienes permisos para ver roles',
+                'status' => 'error'
+            ], 403);
+        }
+
+        $roles = Role::orderBy('name')->get()
+            ->reject(fn (Role $r) => !$actor->hasRole('super_admin') && $r->name === 'super_admin')
+            ->map(fn (Role $r) => [
+                'name' => $r->name,
+                'label' => $r->display_name ?? $r->name,
+            ])
+            ->values();
+
+        return response()->json(['items' => $roles]);
     }
 }
