@@ -20,9 +20,15 @@ class UbiDistritoSeeder extends Seeder
             return;
         }
         
-        // Temporalmente desactivar las restricciones de clave foránea
-        \DB::statement('SET FOREIGN_KEY_CHECKS=0;');
-        
+        // Cada motor desactiva las claves foráneas a su manera. En PostgreSQL
+        // no hace falta: regiones y provincias ya están sembradas antes.
+        $driver = \DB::connection()->getDriverName();
+        if ($driver === 'sqlite') {
+            \DB::statement('PRAGMA foreign_keys = OFF;');
+        } elseif ($driver === 'mysql' || $driver === 'mariadb') {
+            \DB::statement('SET FOREIGN_KEY_CHECKS=0;');
+        }
+
         $file = fopen($filePath, 'r');
         $header = fgetcsv($file, 0, '|'); // Skip header line
         
@@ -56,9 +62,13 @@ class UbiDistritoSeeder extends Seeder
         }
         
         fclose($file);
-        
+
         // Reactivar las restricciones de clave foránea
-        \DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+        if ($driver === 'sqlite') {
+            \DB::statement('PRAGMA foreign_keys = ON;');
+        } elseif ($driver === 'mysql' || $driver === 'mariadb') {
+            \DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+        }
         
         $this->command->info("Successfully imported {$count} districts from data_ubi.txt");
     }

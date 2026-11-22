@@ -83,6 +83,7 @@ class UbiProvinciasSeeder extends Seeder
             ['id' => '080100', 'nombre' => 'Cusco', 'region_id' => '080000'],
             ['id' => '080200', 'nombre' => 'Acomayo', 'region_id' => '080000'],
             ['id' => '080300', 'nombre' => 'Anta', 'region_id' => '080000'],
+            ['id' => '080400', 'nombre' => 'Calca', 'region_id' => '080000'],
             ['id' => '080500', 'nombre' => 'Canas', 'region_id' => '080000'],
             ['id' => '080600', 'nombre' => 'Canchis', 'region_id' => '080000'],
             ['id' => '080700', 'nombre' => 'Chumbivilcas', 'region_id' => '080000'],

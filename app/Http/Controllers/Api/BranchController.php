@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\ScopesByCompany;
 use App\Http\Requests\Branch\StoreBranchRequest;
 use App\Http\Requests\Branch\UpdateBranchRequest;
 use App\Models\Branch;
@@ -14,6 +15,8 @@ use Exception;
 
 class BranchController extends Controller
 {
+    use ScopesByCompany;
+
     /**
      * Listar sucursales de una empresa
      */
@@ -21,11 +24,7 @@ class BranchController extends Controller
     {
         try {
             $query = Branch::with(['company:id,ruc,razon_social']);
-
-            // Filtrar por empresa si se proporciona
-            if ($request->has('company_id')) {
-                $query->where('company_id', $request->company_id);
-            }
+            $this->scopeToUserCompany($query, $request);
 
             $branches = $query->get();
 

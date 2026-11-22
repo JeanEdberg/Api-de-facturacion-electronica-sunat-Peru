@@ -14,10 +14,11 @@ class DatabaseSeeder extends Seeder
 
         // Ejecutar seeders de la API SUNAT
         $this->call([
-            /* RolesAndPermissionsSeeder::class, */
+            RolesAndPermissionsSeeder::class,
             UbiRegionesSeeder::class,
             UbiProvinciasSeeder::class,
-            UbiDistritoSeeder::class
+            UbiDistritoSeeder::class,
+            InmoaSeeder::class,
         ]);
     }
 }

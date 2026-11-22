@@ -154,6 +154,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role ? $user->role->display_name : 'Sin rol',
+                'company_id' => $user->company_id,
                 'company' => $user->company ? $user->company->razon_social : null,
                 'permissions' => $user->getAllPermissions(),
                 'last_login_at' => $user->last_login_at,
@@ -167,7 +168,11 @@ class AuthController extends Controller
      */
     public function createUser(Request $request)
     {
-        if (!$request->user()->hasRole('super_admin')) {
+        $actor = $request->user();
+        $esSuperAdmin = $actor->hasRole('super_admin');
+        $esAdminEmpresa = $actor->hasRole('company_admin');
+
+        if (!$esSuperAdmin && !$esAdminEmpresa) {
             return response()->json([
                 'message' => 'No tienes permisos para crear usuarios',
                 'status' => 'error'
@@ -182,6 +187,36 @@ class AuthController extends Controller
             'company_id' => 'nullable|integer|exists:companies,id',
             'user_type' => 'required|in:system,user,api_client',
         ]);
+
+        // El admin de empresa sólo puede crear usuarios dentro de su empresa y
+        // sin roles de alcance global (super_admin).
+        if (!$esSuperAdmin) {
+            if (!$actor->company_id) {
+                return response()->json([
+                    'message' => 'Tu usuario no tiene empresa asignada',
+                    'status' => 'error'
+                ], 403);
+            }
+            if ((int) $request->company_id !== (int) $actor->company_id) {
+                return response()->json([
+                    'message' => 'Sólo puedes crear usuarios en tu propia empresa',
+                    'status' => 'error'
+                ], 403);
+            }
+            if ($request->role_name === 'super_admin') {
+                return response()->json([
+                    'message' => 'No puedes asignar el rol super_admin',
+                    'status' => 'error'
+                ], 403);
+            }
+            // api_client y system son cuentas de alcance global, no de empresa.
+            if ($request->user_type !== 'user') {
+                return response()->json([
+                    'message' => 'Sólo puedes crear usuarios de tipo user',
+                    'status' => 'error'
+                ], 403);
+            }
+        }
 
         try {
             $role = Role::where('name', $request->role_name)->first();
@@ -258,5 +293,191 @@ class AuthController extends Controller
         } catch (\Exception $e) {
             return false;
         }
+    }
+
+    /**
+     * Lista los usuarios visibles para el actor autenticado.
+     * super_admin ve todos; company_admin sólo los de su empresa.
+     */
+    public function listUsers(Request $request)
+    {
+        $actor = $request->user();
+
+        if (!$actor->hasRole('super_admin') && !$actor->hasRole('company_admin')) {
+            return response()->json([
+                'message' => 'No tienes permisos para ver usuarios',
+                'status' => 'error'
+            ], 403);
+        }
+
+        $query = User::with('role')->orderBy('name');
+
+        if (!$actor->hasRole('super_admin')) {
+            $query->where('company_id', $actor->company_id);
+        }
+
+        $usuarios = $query->get()->map(fn (User $u) => [
+            'id' => $u->id,
+            'name' => $u->name,
+            'email' => $u->email,
+            'role' => $u->role?->name,
+            'role_label' => $u->role?->display_name,
+            'company_id' => $u->company_id,
+            'user_type' => $u->user_type,
+            'active' => (bool) $u->active,
+            'last_login_at' => $u->last_login_at,
+        ]);
+
+        return response()->json(['items' => $usuarios]);
+    }
+
+    /**
+     * Roles que el actor puede asignar. El admin de empresa no puede repartir
+     * super_admin.
+     */
+    public function listRoles(Request $request)
+    {
+        $actor = $request->user();
+
+        if (!$actor->hasRole('super_admin') && !$actor->hasRole('company_admin')) {
+            return response()->json([
+                'message' => 'No tienes permisos para ver roles',
+                'status' => 'error'
+            ], 403);
+        }
+
+        $roles = Role::orderBy('name')->get()
+            ->reject(fn (Role $r) => !$actor->hasRole('super_admin') && $r->name === 'super_admin')
+            ->map(fn (Role $r) => [
+                'name' => $r->name,
+                'label' => $r->display_name ?? $r->name,
+            ])
+            ->values();
+
+        return response()->json(['items' => $roles]);
+    }
+
+    /**
+     * Activar o desactivar una cuenta.
+     *
+     * Desactivar surte efecto de inmediato: se revocan los tokens abiertos para
+     * que ninguna sesión en curso siga operando. El middleware `active` ya
+     * cortaría la siguiente petición, pero borrar los tokens evita dejar
+     * credenciales vivas apuntando a una cuenta cerrada.
+     */
+    public function setActive(Request $request, User $user)
+    {
+        $actor = $request->user();
+        $error = $this->autorizarGestionDeUsuario($actor, $user);
+
+        if ($error) {
+            return $error;
+        }
+
+        $request->validate([
+            'active' => 'required|boolean',
+        ]);
+
+        $activo = (bool) $request->boolean('active');
+
+        $user->update(['active' => $activo]);
+
+        if (!$activo) {
+            $user->tokens()->delete();
+        }
+
+        return response()->json([
+            'message' => $activo ? 'Usuario activado' : 'Usuario desactivado',
+            'user' => $this->resumenDeUsuario($user->fresh('role')),
+        ]);
+    }
+
+    /**
+     * Cambiar el rol de una cuenta. El nuevo rol se aplica en la siguiente
+     * petición porque Sanctum recarga el usuario desde la base de datos.
+     */
+    public function setRole(Request $request, User $user)
+    {
+        $actor = $request->user();
+        $error = $this->autorizarGestionDeUsuario($actor, $user);
+
+        if ($error) {
+            return $error;
+        }
+
+        $request->validate([
+            'role_name' => 'required|string|exists:roles,name',
+        ]);
+
+        if (!$actor->hasRole('super_admin') && $request->role_name === 'super_admin') {
+            return response()->json([
+                'message' => 'No puedes asignar el rol super_admin',
+                'status' => 'error',
+            ], 403);
+        }
+
+        $nuevoRol = Role::where('name', $request->role_name)->first();
+
+        $user->update(['role_id' => $nuevoRol->id]);
+
+        return response()->json([
+            'message' => 'Rol actualizado',
+            'user' => $this->resumenDeUsuario($user->fresh('role')),
+        ]);
+    }
+
+    /**
+     * Reglas comunes a las acciones de gestión de usuarios. Devuelve la
+     * respuesta de error o null si el actor puede operar sobre el objetivo.
+     */
+    private function autorizarGestionDeUsuario(User $actor, User $objetivo)
+    {
+        if (!$actor->hasRole('super_admin') && !$actor->hasRole('company_admin')) {
+            return response()->json([
+                'message' => 'No tienes permisos para gestionar usuarios',
+                'status' => 'error',
+            ], 403);
+        }
+
+        // Operar sobre la propia cuenta permitiría autodesactivarse o
+        // autodegradarse y quedarse fuera del sistema.
+        if ($actor->id === $objetivo->id) {
+            return response()->json([
+                'message' => 'No puedes modificar tu propia cuenta',
+                'status' => 'error',
+            ], 403);
+        }
+
+        if (!$actor->hasRole('super_admin')) {
+            if (!$actor->company_id || (int) $objetivo->company_id !== (int) $actor->company_id) {
+                return response()->json([
+                    'message' => 'Sólo puedes gestionar usuarios de tu propia empresa',
+                    'status' => 'error',
+                ], 403);
+            }
+
+            if ($objetivo->hasRole('super_admin')) {
+                return response()->json([
+                    'message' => 'No puedes gestionar a un super administrador',
+                    'status' => 'error',
+                ], 403);
+            }
+        }
+
+        return null;
+    }
+
+    private function resumenDeUsuario(User $u): array
+    {
+        return [
+            'id' => $u->id,
+            'name' => $u->name,
+            'email' => $u->email,
+            'role' => $u->role?->name,
+            'role_label' => $u->role?->display_name,
+            'company_id' => $u->company_id,
+            'user_type' => $u->user_type,
+            'active' => (bool) $u->active,
+        ];
     }
 }

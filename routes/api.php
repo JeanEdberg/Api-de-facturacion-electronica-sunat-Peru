@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\BoletaController;
 use App\Http\Controllers\Api\CompraController;
+use App\Http\Controllers\Api\OnboardingController;
 use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\PdfController;
 use App\Http\Controllers\Api\CompanyConfigController;
@@ -17,10 +18,16 @@ use App\Http\Controllers\Api\ConsultaCpeController;
 use App\Http\Controllers\Api\SetupController;
 use App\Http\Controllers\Api\SireController;
 use App\Http\Controllers\Api\SscoController;
+use App\Http\Controllers\Api\ConsultaDocumentoController;
 use App\Http\Controllers\Api\UbigeoController;
 use App\Http\Controllers\Api\CreditNoteController;
 use App\Http\Controllers\Api\DebitNoteController;
 use App\Http\Controllers\Api\DispatchGuideController;
+use App\Http\Controllers\Api\BulkController;
+use App\Http\Controllers\Api\HistoricalController;
+use App\Http\Controllers\Api\DailySummaryController;
+use App\Http\Controllers\Api\RetentionController;
+use App\Http\Controllers\Api\VoidedDocumentController;
 use App\Http\Controllers\Api\GreCredentialsController;
 
 // ========================
@@ -43,10 +50,19 @@ Route::post('/auth/initialize', [AuthController::class, 'initialize']);
 // Autenticación
 Route::post('/auth/login', [AuthController::class, 'login']);
 
+// Onboarding self-service: una empresa se registra sola (crea empresa, sucursal
+// principal y usuario administrador, con sus credenciales SOL y certificado).
+Route::post('/auth/register', [OnboardingController::class, 'register']);
+
+// Consulta de RUC/DNI (padrón) para autocompletar formularios. Pública porque
+// el alta de empresa ocurre antes de iniciar sesión; se limita por IP.
+Route::get('/v1/consulta-documento', [ConsultaDocumentoController::class, 'show'])
+    ->middleware('throttle:30,1');
+
 // ========================
 // RUTAS PROTEGIDAS (CON AUTENTICACIÓN)
 // ========================
-Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
+Route::prefix('v1')->middleware(['auth:sanctum', 'active'])->group(function () {
 
     // ========================
     // AUTENTICACIÓN Y USUARIO
@@ -54,6 +70,10 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::post('/auth/create-user', [AuthController::class, 'createUser']);
+    Route::get('/auth/users', [AuthController::class, 'listUsers']);
+    Route::get('/auth/roles', [AuthController::class, 'listRoles']);
+    Route::patch('/auth/users/{user}/active', [AuthController::class, 'setActive']);
+    Route::patch('/auth/users/{user}/role', [AuthController::class, 'setRole']);
     
     // Usuario autenticado
     Route::get('/user', function (Request $request) {
@@ -194,9 +214,16 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/', [NotificacionController::class, 'index']);
         Route::post('/', [NotificacionController::class, 'store']);
         Route::post('/sincronizar', [NotificacionController::class, 'sincronizar']);
+        Route::post('/fuente', [NotificacionController::class, 'fuente']);
+        Route::post('/probar-fuente', [NotificacionController::class, 'probarFuente']);
         Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
         Route::post('/{notificacion}/adjuntos', [NotificacionController::class, 'adjuntar']);
         Route::get('/{notificacion}/adjunto', [NotificacionController::class, 'descargarAdjunto']);
+        // Bajo demanda: pide el PDF al puente y lo guarda. Es el camino de las
+        // constancias, que no se bajan al sincronizar.
+        Route::post('/{notificacion}/documento', [NotificacionController::class, 'descargarDocumento']);
+        // Única vía que abre la carta: registra el acuse de recibo.
+        Route::post('/{notificacion}/abrir', [NotificacionController::class, 'abrir']);
     });
 
     // ========================
@@ -283,6 +310,63 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/download-pdf', [DispatchGuideController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [DispatchGuideController::class, 'generatePdf']);
         Route::post('/{id}/send-sunat', [DispatchGuideController::class, 'sendToSunat']);
+    });
+
+    // ========================
+    // CARGA MASIVA
+    // ========================
+    Route::prefix('bulk')->group(function () {
+        Route::get('/plantilla', [BulkController::class, 'plantilla']);
+        Route::post('/documentos', [BulkController::class, 'store']);
+    });
+
+    // ========================
+    // IMPORTACIÓN HISTÓRICA
+    // ========================
+    Route::prefix('historical')->group(function () {
+        Route::get('/plantilla', [HistoricalController::class, 'plantilla']);
+        Route::post('/importar', [HistoricalController::class, 'importar']);
+    });
+
+    // ========================
+    // RESÚMENES DIARIOS (BOLETAS)
+    // ========================
+    Route::prefix('daily-summaries')->group(function () {
+        Route::get('/pending', [DailySummaryController::class, 'pending']);
+        Route::get('/', [DailySummaryController::class, 'index']);
+        Route::post('/', [DailySummaryController::class, 'store']);
+        Route::get('/{id}', [DailySummaryController::class, 'show']);
+        Route::get('/{id}/download-xml', [DailySummaryController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DailySummaryController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DailySummaryController::class, 'downloadPdf']);
+        Route::post('/{id}/send-sunat', [DailySummaryController::class, 'sendToSunat']);
+        Route::post('/{id}/check-status', [DailySummaryController::class, 'checkStatus']);
+    });
+
+    // ========================
+    // RETENCIONES (TIPO 20)
+    // ========================
+    Route::prefix('retentions')->group(function () {
+        Route::get('/', [RetentionController::class, 'index']);
+        Route::post('/', [RetentionController::class, 'store']);
+        Route::get('/{id}', [RetentionController::class, 'show']);
+        Route::get('/{id}/download-xml', [RetentionController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [RetentionController::class, 'downloadCdr']);
+        Route::post('/{id}/send-sunat', [RetentionController::class, 'sendToSunat']);
+    });
+
+    // ========================
+    // COMUNICACIÓN DE BAJA (ANULACIÓN)
+    // ========================
+    Route::prefix('voided-documents')->group(function () {
+        Route::get('/candidates', [VoidedDocumentController::class, 'candidates']);
+        Route::get('/', [VoidedDocumentController::class, 'index']);
+        Route::post('/', [VoidedDocumentController::class, 'store']);
+        Route::get('/{id}', [VoidedDocumentController::class, 'show']);
+        Route::get('/{id}/download-xml', [VoidedDocumentController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [VoidedDocumentController::class, 'downloadCdr']);
+        Route::post('/{id}/send-sunat', [VoidedDocumentController::class, 'sendToSunat']);
+        Route::post('/{id}/check-status', [VoidedDocumentController::class, 'checkStatus']);
     });
 
     // ========================

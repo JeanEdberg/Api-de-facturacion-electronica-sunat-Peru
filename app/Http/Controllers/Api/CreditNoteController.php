@@ -176,7 +176,7 @@ class CreditNoteController extends Controller
         return $download;
     }
 
-    public function sendToSunat($id): JsonResponse
+    public function sendToSunat(Request $request, $id): JsonResponse
     {
         $doc = CreditNote::with(['company', 'branch', 'client'])->findOrFail($id);
 
@@ -185,6 +185,17 @@ class CreditNoteController extends Controller
                 'success' => false,
                 'message' => 'El documento ya fue enviado y aceptado por SUNAT',
             ], 400);
+        }
+
+        // Modo asíncrono: encola el envío con reintentos.
+        if ($request->boolean('async')) {
+            \App\Jobs\SendDocumentToSunatJob::dispatch('credit_note', $doc->id);
+
+            return response()->json([
+                'success' => true,
+                'data' => $doc,
+                'message' => 'Envío encolado: se procesará con reintentos automáticos',
+            ], 202);
         }
 
         $result = $this->documentService->sendToSunat($doc, 'credit_note');

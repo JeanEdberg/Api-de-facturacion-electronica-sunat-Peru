@@ -45,4 +45,9 @@ return [
         'cert_alerta_dias' => env('BUZON_CERT_ALERTA_DIAS', 30),
     ],
 
+    // Padrón RUC/DNI para autocompletar formularios.
+    'decolecta' => [
+        'token' => env('DECOLECTA_TOKEN'),
+    ],
+
 ];
