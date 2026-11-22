@@ -356,4 +356,128 @@ class AuthController extends Controller
 
         return response()->json(['items' => $roles]);
     }
+
+    /**
+     * Activar o desactivar una cuenta.
+     *
+     * Desactivar surte efecto de inmediato: se revocan los tokens abiertos para
+     * que ninguna sesión en curso siga operando. El middleware `active` ya
+     * cortaría la siguiente petición, pero borrar los tokens evita dejar
+     * credenciales vivas apuntando a una cuenta cerrada.
+     */
+    public function setActive(Request $request, User $user)
+    {
+        $actor = $request->user();
+        $error = $this->autorizarGestionDeUsuario($actor, $user);
+
+        if ($error) {
+            return $error;
+        }
+
+        $request->validate([
+            'active' => 'required|boolean',
+        ]);
+
+        $activo = (bool) $request->boolean('active');
+
+        $user->update(['active' => $activo]);
+
+        if (!$activo) {
+            $user->tokens()->delete();
+        }
+
+        return response()->json([
+            'message' => $activo ? 'Usuario activado' : 'Usuario desactivado',
+            'user' => $this->resumenDeUsuario($user->fresh('role')),
+        ]);
+    }
+
+    /**
+     * Cambiar el rol de una cuenta. El nuevo rol se aplica en la siguiente
+     * petición porque Sanctum recarga el usuario desde la base de datos.
+     */
+    public function setRole(Request $request, User $user)
+    {
+        $actor = $request->user();
+        $error = $this->autorizarGestionDeUsuario($actor, $user);
+
+        if ($error) {
+            return $error;
+        }
+
+        $request->validate([
+            'role_name' => 'required|string|exists:roles,name',
+        ]);
+
+        if (!$actor->hasRole('super_admin') && $request->role_name === 'super_admin') {
+            return response()->json([
+                'message' => 'No puedes asignar el rol super_admin',
+                'status' => 'error',
+            ], 403);
+        }
+
+        $nuevoRol = Role::where('name', $request->role_name)->first();
+
+        $user->update(['role_id' => $nuevoRol->id]);
+
+        return response()->json([
+            'message' => 'Rol actualizado',
+            'user' => $this->resumenDeUsuario($user->fresh('role')),
+        ]);
+    }
+
+    /**
+     * Reglas comunes a las acciones de gestión de usuarios. Devuelve la
+     * respuesta de error o null si el actor puede operar sobre el objetivo.
+     */
+    private function autorizarGestionDeUsuario(User $actor, User $objetivo)
+    {
+        if (!$actor->hasRole('super_admin') && !$actor->hasRole('company_admin')) {
+            return response()->json([
+                'message' => 'No tienes permisos para gestionar usuarios',
+                'status' => 'error',
+            ], 403);
+        }
+
+        // Operar sobre la propia cuenta permitiría autodesactivarse o
+        // autodegradarse y quedarse fuera del sistema.
+        if ($actor->id === $objetivo->id) {
+            return response()->json([
+                'message' => 'No puedes modificar tu propia cuenta',
+                'status' => 'error',
+            ], 403);
+        }
+
+        if (!$actor->hasRole('super_admin')) {
+            if (!$actor->company_id || (int) $objetivo->company_id !== (int) $actor->company_id) {
+                return response()->json([
+                    'message' => 'Sólo puedes gestionar usuarios de tu propia empresa',
+                    'status' => 'error',
+                ], 403);
+            }
+
+            if ($objetivo->hasRole('super_admin')) {
+                return response()->json([
+                    'message' => 'No puedes gestionar a un super administrador',
+                    'status' => 'error',
+                ], 403);
+            }
+        }
+
+        return null;
+    }
+
+    private function resumenDeUsuario(User $u): array
+    {
+        return [
+            'id' => $u->id,
+            'name' => $u->name,
+            'email' => $u->email,
+            'role' => $u->role?->name,
+            'role_label' => $u->role?->display_name,
+            'company_id' => $u->company_id,
+            'user_type' => $u->user_type,
+            'active' => (bool) $u->active,
+        ];
+    }
 }

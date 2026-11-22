@@ -67,6 +67,8 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'active'])->group(function () {
     Route::post('/auth/create-user', [AuthController::class, 'createUser']);
     Route::get('/auth/users', [AuthController::class, 'listUsers']);
     Route::get('/auth/roles', [AuthController::class, 'listRoles']);
+    Route::patch('/auth/users/{user}/active', [AuthController::class, 'setActive']);
+    Route::patch('/auth/users/{user}/role', [AuthController::class, 'setRole']);
     
     // Usuario autenticado
     Route::get('/user', function (Request $request) {
