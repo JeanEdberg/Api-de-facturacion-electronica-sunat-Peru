@@ -57,7 +57,7 @@ Route::get('/v1/consulta-documento', [ConsultaDocumentoController::class, 'show'
 // ========================
 // RUTAS PROTEGIDAS (CON AUTENTICACIÓN)
 // ========================
-Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
+Route::prefix('v1')->middleware(['auth:sanctum', 'active'])->group(function () {
 
     // ========================
     // AUTENTICACIÓN Y USUARIO

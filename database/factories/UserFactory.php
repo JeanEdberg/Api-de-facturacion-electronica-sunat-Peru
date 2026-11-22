@@ -29,6 +29,9 @@ class UserFactory extends Factory
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
+            // La columna tiene default true en la BD; sin esto el modelo en
+            // memoria queda con active = null y parece una cuenta desactivada.
+            'active' => true,
         ];
     }
 
