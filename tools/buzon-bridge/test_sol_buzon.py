@@ -1728,3 +1728,77 @@ class AccionesPreviasTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RegistroEsperadoTest(unittest.TestCase):
+    """Antes de pulsar, el puente comprueba que la fila sigue siendo la misma.
+
+    El índice es sólo la posición de la fila: si SUNAFIL reordena la bandeja,
+    el índice guardado apunta a otra notificación y se abriría la equivocada.
+    """
+
+    def setUp(self):
+        self.sesion = mock.Mock()
+        self.sesion.get = mock.Mock(return_value=("url", "<html></html>"))
+        parche = mock.patch.object(puente, "Sesion", return_value=self.sesion)
+        parche.start()
+        self.addCleanup(parche.stop)
+
+    def _descargar(self, registro_esperado, indice=0):
+        html = (
+            '<form id="formactosAdministrativos">'
+            '<input type="hidden" name="javax.faces.ViewState" value="VS:9"/></form>'
+            + _tabla_con(_fila_con(BOTON_DEPOSITO))
+        )
+        with mock.patch.object(
+            puente, "autenticar_sunafil", return_value=("C", "S")
+        ), mock.patch.object(
+            puente, "_abrir_bandeja", return_value=("http://u/Empleador", html)
+        ), mock.patch.object(puente, "carta_sunafil", None):
+            return puente.descargar_documento(
+                "20614684772",
+                "MODDATOS",
+                "clave",
+                "Acciones Previas",
+                indice,
+                "constancia_deposito",
+                registro_esperado=registro_esperado,
+            )
+
+    def test_extrae_el_registro_de_la_fila(self):
+        fila = _fila_con(BOTON_DEPOSITO)
+        self.assertEqual(
+            puente._registro_de_fila(fila), "0000122241 - 2026 - SUNAFIL/DPPR/SDPA"
+        )
+
+    def test_sin_registro_en_la_fila_devuelve_vacio(self):
+        self.assertEqual(puente._registro_de_fila("<td>sin codigo</td>"), "")
+
+    def test_con_el_registro_correcto_pulsa_y_devuelve_el_pdf(self):
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        _, contenido = self._descargar("0000122241 - 2026 - SUNAFIL/DPPR/SDPA")
+
+        self.assertTrue(contenido.startswith(b"%PDF"))
+        self.sesion.post_crudo.assert_called_once()
+
+    def test_con_otro_registro_no_pulsa_nada(self):
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        with self.assertRaises(puente.ConflictoRegistro) as ctx:
+            self._descargar("0000129999 - 2026 - SUNAFIL/DPPR/SDPA")
+
+        # Lo importante: no se llegó a pulsar el botón.
+        self.sesion.post_crudo.assert_not_called()
+        self.assertIn("cambió de orden", ctx.exception.mensaje)
+
+    def test_sin_registro_esperado_no_valida_nada(self):
+        """Compatibilidad: quien no lo pase se comporta como antes."""
+        self.sesion.post_crudo = mock.Mock(
+            return_value=("u", {"Content-Type": "application/pdf"}, b"%PDF-1.4 x")
+        )
+        _, contenido = self._descargar(None)
+
+        self.assertTrue(contenido.startswith(b"%PDF"))

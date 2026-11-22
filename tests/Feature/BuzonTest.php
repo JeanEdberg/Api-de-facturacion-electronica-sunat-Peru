@@ -517,7 +517,7 @@ test('aplana las bandejas de SUNAFIL y guarda bandeja e índice', function () {
     expect($detalle['indice'])->toBe(1);
 });
 
-test('baja la carta al sincronizar SUNAFIL y la deja adjunta', function () {
+test('sincronizar NO baja la carta: abrirla registra el acuse', function () {
     config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
     Storage::fake('public');
 
@@ -535,22 +535,15 @@ test('baja la carta al sincronizar SUNAFIL y la deja adjunta', function () {
             'company_id' => $this->company->id,
             'entidad' => 'SUNAFIL',
         ])
-        ->assertStatus(200)
-        ->assertJsonPath('data.cartas_descargadas', 1);
+        ->assertStatus(200);
 
     $notificacion = Notificacion::firstOrFail();
 
-    expect($notificacion->tiene_adjunto)->toBeTrue();
-    Storage::disk('public')->assertExists($notificacion->adjunto_path);
-    expect(Storage::disk('public')->get($notificacion->adjunto_path))->toStartWith('%PDF');
-
-    // El puente necesita bandeja e índice: sin ellos bajaría otra fila.
-    Http::assertSent(function ($peticion) {
-        return str_ends_with($peticion->url(), '/documento')
-            && $peticion['bandeja'] === 'acciones_previas'
-            && $peticion['indice'] === 0
-            && $peticion['tipo'] === 'carta';
-    });
+    // Lo importante: sincronizar sólo lee. No se pulsó ningún botón, así que
+    // no se registró ningún acuse.
+    expect($notificacion->tiene_adjunto)->toBeFalse();
+    expect($notificacion->ruta_carta)->toBeNull();
+    Http::assertNotSent(fn ($peticion) => str_ends_with($peticion->url(), '/documento'));
 });
 
 test('descarga una constancia bajo demanda y la sirve como adjunto', function () {
@@ -581,10 +574,16 @@ test('descarga una constancia bajo demanda y la sirve como adjunto', function ()
     Http::assertSent(fn ($peticion) => str_ends_with($peticion->url(), '/documento')
         && $peticion['tipo'] === 'constancia_acuse');
 
-    // Y el endpoint de adjunto ya la encuentra guardada.
+    // La constancia sí se sirve directamente: no tiene efecto legal.
+    $this->actingAs($this->user)
+        ->get("/api/v1/notificaciones/{$notificacion->id}/adjunto?tipo=constancia_acuse")
+        ->assertStatus(200);
+
+    // La carta, en cambio, no se sirve hasta que se abra de verdad.
     $this->actingAs($this->user)
         ->get("/api/v1/notificaciones/{$notificacion->id}/adjunto")
-        ->assertStatus(200);
+        ->assertStatus(409)
+        ->assertJsonPath('requiere_apertura', true);
 });
 
 test('no pide el documento si la notificación no dice de qué fila salió', function () {
@@ -635,4 +634,153 @@ test('re-sincronizar no devuelve a pendiente una notificación ya leída', funct
     // El usuario ya la había leído: sincronizar no debe deshacer eso.
     expect($notificacion->refresh()->estado)->toBe('leida');
     expect($notificacion->refresh()->leida_en)->not->toBeNull();
+});
+
+/*
+ * «Abrir y notificarse»: abrir la carta registra el acuse de recibo y arranca
+ * un plazo legal, así que es la única vía que la baja y exige permiso y
+ * confirmación explícita.
+ */
+
+function usuarioConRol(Company $company, string $rol): User
+{
+    $role = \App\Models\Role::create([
+        'name' => $rol,
+        'display_name' => $rol,
+        'is_system' => true,
+        'active' => true,
+    ]);
+
+    return User::factory()->create([
+        'company_id' => $company->id,
+        'role_id' => $role->id,
+    ]);
+}
+
+function notificacionSunafil(Company $company, array $extra = []): Notificacion
+{
+    return Notificacion::create(array_merge([
+        'company_id' => $company->id,
+        'entidad' => 'SUNAFIL',
+        'codigo' => '0000122241 - 2026 - SUNAFIL/DPPR/SDPA',
+        'asunto' => 'Carta inductiva',
+        'detalle' => json_encode(['bandeja' => 'acciones_previas', 'indice' => 0]),
+        'origen' => 'sincronizada',
+        'con_acuse' => false,
+    ], $extra));
+}
+
+test('abrir la carta registra el acuse y baja los tres documentos', function () {
+    Storage::fake('public');
+    config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
+
+    Http::fake([
+        'puente.test/documento' => Http::response('%PDF-1.4 doc', 200, ['Content-Type' => 'application/pdf']),
+    ]);
+
+    $admin = usuarioConRol($this->company, 'company_admin');
+    $notificacion = notificacionSunafil($this->company);
+
+    $this->actingAs($admin)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/abrir", ['confirmo' => true])
+        ->assertStatus(200)
+        ->assertJsonPath('data.ok', true);
+
+    $notificacion->refresh();
+
+    expect($notificacion->con_acuse)->toBeTrue();
+    expect($notificacion->apertura_solicitada_por)->toBe($admin->id);
+    expect($notificacion->apertura_solicitada_en)->not->toBeNull();
+    expect($notificacion->ruta_carta)->not->toBeNull();
+    expect($notificacion->ruta_constancia_acuse)->not->toBeNull();
+
+    // Y el puente recibe el registro para no pulsar la fila equivocada.
+    Http::assertSent(fn ($peticion) => str_ends_with($peticion->url(), '/documento')
+        && $peticion['tipo'] === 'carta'
+        && $peticion['registro_esperado'] === $notificacion->codigo);
+});
+
+test('abrir sin confirmar no toca la casilla', function () {
+    Storage::fake('public');
+    Http::fake();
+
+    $admin = usuarioConRol($this->company, 'company_admin');
+    $notificacion = notificacionSunafil($this->company);
+
+    $this->actingAs($admin)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/abrir")
+        ->assertStatus(422);
+
+    Http::assertNothingSent();
+    expect($notificacion->refresh()->con_acuse)->toBeFalse();
+});
+
+test('un usuario sin permiso no puede abrir la carta', function () {
+    Storage::fake('public');
+    Http::fake();
+
+    $lector = usuarioConRol($this->company, 'read_only');
+    $notificacion = notificacionSunafil($this->company);
+
+    $this->actingAs($lector)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/abrir", ['confirmo' => true])
+        ->assertStatus(403);
+
+    Http::assertNothingSent();
+    expect($notificacion->refresh()->con_acuse)->toBeFalse();
+});
+
+test('no se abre dos veces una notificación que ya tiene acuse', function () {
+    Storage::fake('public');
+    Http::fake();
+
+    $admin = usuarioConRol($this->company, 'company_admin');
+    $notificacion = notificacionSunafil($this->company, ['con_acuse' => true]);
+
+    $this->actingAs($admin)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/abrir", ['confirmo' => true])
+        ->assertStatus(502)
+        ->assertJsonPath('data.ok', false);
+
+    Http::assertNothingSent();
+});
+
+test('si el puente detecta que la bandeja se reordenó, no se marca el acuse', function () {
+    Storage::fake('public');
+    config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
+
+    Http::fake([
+        'puente.test/documento' => Http::response([
+            'error' => 'La bandeja cambió de orden: la fila ya no es esa notificación.',
+        ], 409),
+    ]);
+
+    $admin = usuarioConRol($this->company, 'company_admin');
+    $notificacion = notificacionSunafil($this->company);
+
+    $this->actingAs($admin)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/abrir", ['confirmo' => true])
+        ->assertStatus(502)
+        ->assertJsonPath('data.ok', false);
+
+    $notificacion->refresh();
+
+    // Clave: se anotó el intento, pero NO se dio por notificada.
+    expect($notificacion->con_acuse)->toBeFalse();
+    expect($notificacion->apertura_solicitada_por)->toBe($admin->id);
+    expect($notificacion->apertura_resultado)->toContain('error');
+});
+
+test('el aviso de plazo aparece para las notificaciones sin acuse', function () {
+    $admin = usuarioConRol($this->company, 'company_admin');
+
+    notificacionSunafil($this->company, [
+        'ultimo_dia_acuse_manual' => now()->addDay()->format('Y-m-d'),
+    ]);
+
+    $this->actingAs($admin)
+        ->getJson("/api/v1/notificaciones?company_id={$this->company->id}")
+        ->assertStatus(200)
+        ->assertJsonPath('alertas.acuse.0.dias_restantes', 1)
+        ->assertJsonPath('alertas.acuse.0.vencido', false);
 });

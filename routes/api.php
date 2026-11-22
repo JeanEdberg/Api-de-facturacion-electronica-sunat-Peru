@@ -213,6 +213,8 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         // Bajo demanda: pide el PDF al puente y lo guarda. Es el camino de las
         // constancias, que no se bajan al sincronizar.
         Route::post('/{notificacion}/documento', [NotificacionController::class, 'descargarDocumento']);
+        // Única vía que abre la carta: registra el acuse de recibo.
+        Route::post('/{notificacion}/abrir', [NotificacionController::class, 'abrir']);
     });
 
     // ========================

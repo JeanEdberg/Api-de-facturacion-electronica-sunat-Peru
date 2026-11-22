@@ -7,6 +7,7 @@ use App\Models\Notificacion;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Support\DiasHabiles;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -26,6 +27,9 @@ use Illuminate\Support\Facades\Storage;
 class BuzonService
 {
     public const ENTIDADES = ['SUNAT', 'SUNAFIL'];
+
+    /** Los tres documentos que ofrece una fila de la casilla de SUNAFIL. */
+    public const TIPOS = ['carta', 'constancia_deposito', 'constancia_acuse'];
 
     /**
      * Registra una notificación manual. Si llega código repetido para la misma
@@ -100,6 +104,10 @@ class BuzonService
      */
     public function descargarDocumento(Notificacion $notificacion, string $tipo = 'carta'): array
     {
+        if (! in_array($tipo, self::TIPOS, true)) {
+            return ['ok' => false, 'message' => "Tipo de documento desconocido: {$tipo}."];
+        }
+
         $origen = $this->origenDocumento($notificacion);
 
         if (! $origen) {
@@ -131,11 +139,25 @@ class BuzonService
                     'bandeja' => $origen['bandeja'],
                     'indice' => $origen['indice'],
                     'tipo' => $tipo,
+                    // El puente compara esto con la fila antes de pulsar: si la
+                    // bandeja se reordenó, se niega en vez de abrir otra.
+                    'registro_esperado' => $notificacion->codigo,
                 ]);
         } catch (\Illuminate\Http\Client\ConnectionException) {
             return [
                 'ok' => false,
                 'message' => "No se pudo llegar al puente en {$endpoint}. Revisa que esté levantado.",
+            ];
+        }
+
+        // 409 = la fila del índice ya es otra notificación. No es un fallo del
+        // puente: hay que re-sincronizar para refrescar el índice.
+        if ($respuesta->status() === 409) {
+            return [
+                'ok' => false,
+                'conflicto' => true,
+                'message' => $respuesta->json('error')
+                    ?: 'La bandeja cambió de orden. Vuelve a sincronizar antes de abrir.',
             ];
         }
 
@@ -159,9 +181,7 @@ class BuzonService
             ];
         }
 
-        $ruta = "buzon/{$notificacion->company_id}/{$notificacion->id}.pdf";
-        Storage::disk('public')->put($ruta, $contenido);
-        $notificacion->update(['adjunto_path' => $ruta, 'tiene_adjunto' => true]);
+        $ruta = $this->guardarDocumento($notificacion, $tipo, $contenido);
 
         Log::info('Documento del buzón descargado', [
             'notificacion_id' => $notificacion->id,
@@ -170,6 +190,122 @@ class BuzonService
         ]);
 
         return ['ok' => true, 'archivo' => $ruta, 'bytes' => strlen($contenido)];
+    }
+
+    /**
+     * Guarda el PDF en su ruta propia y la anota en la notificación.
+     *
+     * Cada documento tiene su columna: la carta y las constancias se piden por
+     * separado y cualquiera puede faltar. `adjunto_path` se mantiene apuntando
+     * a la carta para que la descarga genérica siga funcionando.
+     */
+    private function guardarDocumento(Notificacion $notificacion, string $tipo, string $contenido): string
+    {
+        $ruta = "buzon/{$notificacion->company_id}/{$notificacion->id}-{$tipo}.pdf";
+        Storage::disk('public')->put($ruta, $contenido);
+
+        $cambios = ['ruta_'.$tipo => $ruta];
+
+        if ($tipo === 'carta') {
+            $cambios['adjunto_path'] = $ruta;
+            $cambios['tiene_adjunto'] = true;
+        }
+
+        $notificacion->update($cambios);
+
+        return $ruta;
+    }
+
+    /**
+     * «Abrir y notificarse»: baja la carta y registra el acuse de recibo.
+     *
+     * Abrir la carta en la casilla de SUNAFIL deja constancia de que la empresa
+     * se dio por notificada y arranca el plazo para responder. Por eso esto no
+     * lo hace nunca el cron: lo pide una persona con permiso y confirmándolo.
+     *
+     * La carta va primero y sola: si falla, no se intenta nada más, porque el
+     * acuse pudo quedar registrado igual y hay que mirar la casilla antes de
+     * reintentar. Las constancias se piden después; si aún no están publicadas,
+     * quedan pendientes sin invalidar el acuse.
+     *
+     * @return array{ok: bool, message: string, archivos?: array<int, string>, pendientes?: array<string, string>}
+     */
+    public function abrir(Notificacion $notificacion, int $usuarioId): array
+    {
+        if ($notificacion->con_acuse) {
+            return [
+                'ok' => false,
+                'message' => 'Esta notificación ya tiene acuse registrado. Usa la descarga normal.',
+            ];
+        }
+
+        // Se anota ANTES de pulsar: si la descarga falla a medias, el acuse
+        // pudo quedar registrado y tiene que quedar rastro de quién lo pidió.
+        $notificacion->update([
+            'apertura_solicitada_por' => $usuarioId,
+            'apertura_solicitada_en' => now(),
+            'apertura_resultado' => 'en_curso',
+        ]);
+
+        Log::info('Buzón: apertura solicitada', [
+            'notificacion_id' => $notificacion->id,
+            'registro' => $notificacion->codigo,
+            'usuario' => $usuarioId,
+        ]);
+
+        $carta = $this->descargarDocumento($notificacion, 'carta');
+
+        if (! $carta['ok']) {
+            $notificacion->update(['apertura_resultado' => 'error: '.$carta['message']]);
+
+            return [
+                'ok' => false,
+                'message' => $carta['message'],
+                'aviso' => 'El acuse pudo haberse registrado igual. Revisa la casilla en SUNAFIL antes de reintentar.',
+            ];
+        }
+
+        // A partir de aquí el acuse está hecho: las constancias son un extra.
+        $notificacion->update([
+            'con_acuse' => true,
+            'fecha_acuse' => $notificacion->fecha_acuse ?: now(),
+            'apertura_resultado' => 'ok',
+        ]);
+
+        $archivos = ['carta'];
+        $pendientes = [];
+
+        foreach (['constancia_deposito', 'constancia_acuse'] as $tipo) {
+            $resultado = $this->descargarDocumento($notificacion, $tipo);
+
+            if ($resultado['ok']) {
+                $archivos[] = $tipo;
+            } else {
+                $pendientes[$tipo] = $resultado['message'];
+            }
+        }
+
+        Log::info('Buzón: notificación abierta', [
+            'notificacion_id' => $notificacion->id,
+            'archivos' => $archivos,
+            'pendientes' => array_keys($pendientes),
+        ]);
+
+        return [
+            'ok' => true,
+            'message' => 'Carta abierta y acuse registrado.',
+            'archivos' => $archivos,
+            'pendientes' => $pendientes,
+        ];
+    }
+
+    /**
+     * True si la notificación salió de la casilla y por tanto abrirla puede
+     * registrar un acuse. Las de alta manual no tienen nada que abrir.
+     */
+    public function puedeAbrirse(Notificacion $notificacion): bool
+    {
+        return $this->origenDocumento($notificacion) !== null;
     }
 
     /**
@@ -211,9 +347,23 @@ class BuzonService
         return preg_replace('#/buzon/?$#', '/documento', $buzon);
     }
 
-    public function rutaAdjunto(Notificacion $notificacion): ?string
+    /**
+     * Ruta guardada del documento pedido, o null si aún no se ha bajado.
+     *
+     * Sin tipo devuelve el adjunto genérico (la carta), que es lo que espera
+     * la descarga del listado.
+     */
+    public function rutaAdjunto(Notificacion $notificacion, ?string $tipo = null): ?string
     {
-        $ruta = $notificacion->adjunto_path;
+        $ruta = $tipo === null
+            ? $notificacion->adjunto_path
+            : $notificacion->rutaDocumento($tipo);
+
+        // Un PDF subido a mano también es la carta: si no se bajó de la
+        // casilla, vale el adjunto genérico.
+        if (! $ruta && $tipo === 'carta') {
+            $ruta = $notificacion->adjunto_path;
+        }
 
         if (! $ruta || ! Storage::disk('public')->exists($ruta)) {
             return null;
@@ -337,76 +487,24 @@ class BuzonService
         }
 
         $importadas = 0;
-        $descargadas = 0;
         foreach ($fuentes as $nombre => $endpoint) {
             $importadas += $this->importarDesde($company, $nombre, $endpoint);
         }
 
-        // Las cartas de SUNAFIL llevan plazo legal, así que se bajan en la
-        // misma pasada: esperar a que alguien abra la notificación puede
-        // dejar el plazo vencido. Las constancias van bajo demanda porque
-        // nadie las necesita para responder a tiempo.
-        if ($entidad === null || $entidad === 'SUNAFIL') {
-            $descargadas = $this->descargarCartasPendientes($company);
-        }
+        // Sincronizar sólo LEE la bandeja: no pulsa ningún botón. Abrir la
+        // carta de SUNAFIL registra el acuse de recibo y arranca un plazo
+        // legal, así que esa decisión es del responsable, no del cron.
 
         Log::info('Buzón sincronizado', [
             'company_id' => $company->id,
             'entidad' => $entidad,
             'importadas' => $importadas,
-            'cartas_descargadas' => $descargadas,
         ]);
 
         return [
             'importadas' => $importadas,
-            'cartas_descargadas' => $descargadas,
             'fuentes' => array_values($fuentes),
         ];
-    }
-
-    /**
-     * Baja la carta de las acciones previas de SUNAFIL que aún no la tienen.
-     *
-     * Sólo se intenta con las que traen bandeja e índice; el resto se deja
-     * como está para que un fallo no corte la sincronización entera.
-     */
-    private function descargarCartasPendientes(Company $company): int
-    {
-        $pendientes = Notificacion::query()
-            ->where('company_id', $company->id)
-            ->where('entidad', 'SUNAFIL')
-            ->where('tiene_adjunto', false)
-            ->get();
-
-        $descargadas = 0;
-
-        foreach ($pendientes as $notificacion) {
-            if (! $this->origenDocumento($notificacion)) {
-                continue;
-            }
-
-            try {
-                $resultado = $this->descargarDocumento($notificacion, 'carta');
-            } catch (\Throwable $e) {
-                Log::warning('No se pudo bajar la carta del buzón', [
-                    'notificacion_id' => $notificacion->id,
-                    'error' => $e->getMessage(),
-                ]);
-
-                continue;
-            }
-
-            if ($resultado['ok']) {
-                $descargadas++;
-            } else {
-                Log::info('Carta del buzón no disponible', [
-                    'notificacion_id' => $notificacion->id,
-                    'motivo' => $resultado['message'] ?? 'sin detalle',
-                ]);
-            }
-        }
-
-        return $descargadas;
     }
 
     /**
@@ -473,7 +571,7 @@ class BuzonService
                 'detalle' => $detalle,
                 'url' => $item['url'] ?? null,
                 'origen' => 'sincronizada',
-            ]);
+            ] + $this->datosDeAcuse($item));
 
             if ($notificacion->wasRecentlyCreated) {
                 $importadas++;
@@ -481,6 +579,54 @@ class BuzonService
         }
 
         return $importadas;
+    }
+
+    /**
+     * Fechas, plazo y documentos de acuse que manda el puente de SUNAFIL.
+     *
+     * Sólo se acepta como «con acuse» lo que SUNAFIL confirma: fecha de acuse
+     * Y constancia publicada. Ante la duda se trata como sin acuse, porque un
+     * falso positivo cerraría el plazo sin que nadie se haya notificado.
+     *
+     * @return array<string, mixed>
+     */
+    private function datosDeAcuse(array $item): array
+    {
+        if (! isset($item['registro']) && ! isset($item['fecha_acuse'])) {
+            return [];
+        }
+
+        $documentos = array_values((array) ($item['documentos'] ?? []));
+        $acuse = $this->fechaNormalizada($item['fecha_acuse'] ?? null);
+        $efectos = $this->fechaNormalizada($item['fecha_efectos'] ?? null);
+        $conAcuse = $acuse !== null && in_array('constancia_acuse', $documentos, true);
+
+        $datos = [
+            'tipo_requerimiento' => $item['tipo'] ?? null,
+            'fecha_deposito' => $this->fechaNormalizada($item['fecha_deposito'] ?? null),
+            'fecha_efectos_deposito' => $efectos,
+            'fecha_acuse' => $acuse,
+            'plazo_dias' => is_numeric($item['plazo'] ?? null) ? (int) $item['plazo'] : null,
+            'fecha_limite' => $this->fechaNormalizada($item['fecha_limite'] ?? null),
+            'con_acuse' => $conAcuse,
+            'documentos' => $documentos,
+            'buzon_indice' => is_numeric($item['indice'] ?? null) ? (int) $item['indice'] : null,
+        ];
+
+        // Estimación del último día de acuse manual: días hábiles desde los
+        // efectos del depósito. La fecha buena es la que publique SUNAFIL.
+        if (! $conAcuse && $efectos) {
+            $dias = (int) config('buzon.dias_para_acuse', 5);
+            $desde = new \DateTimeImmutable($efectos);
+            $datos['ultimo_dia_acuse_manual'] = DiasHabiles::sumar(
+                $desde, $dias, (array) config('buzon.feriados', [])
+            )->format('Y-m-d');
+            $datos['acuse_automatico_el'] = DiasHabiles::sumar(
+                $desde, $dias + 1, (array) config('buzon.feriados', [])
+            )->format('Y-m-d');
+        }
+
+        return $datos;
     }
 
     /**

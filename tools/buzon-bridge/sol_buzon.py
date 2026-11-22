@@ -213,6 +213,26 @@ class SolError(Exception):
         self.detalle = detalle
 
 
+class ConflictoRegistro(SolError):
+    """La fila del índice ya no es la que se pidió: SUNAFIL reordenó.
+
+    No es un fallo: el puente se niega a pulsar para no abrir otro documento.
+    """
+
+    def __init__(self, real, esperado):
+        super().__init__(
+            "La bandeja cambió de orden: la fila ya no es esa notificación. "
+            "Vuelve a sincronizar antes de abrir.",
+            detalle=f"esperado={esperado!r} real={real!r}",
+        )
+        self.real = real
+        self.esperado = esperado
+
+
+# Código de registro de la casilla: "0000122241 - 2026 - SUNAFIL/DPPR/SDPA".
+REGISTRO_RE = re.compile(r"\d{6,}\s*-\s*\d{4}(?:\s*-\s*[\w/]+)*")
+
+
 class Sesion:
     """Sesión HTTP con cookies contra el Menú SOL."""
 
@@ -1569,7 +1589,22 @@ def _carta_con_campos_exactos(sesion, url_bandeja, html_bandeja, boton):
     return nombre, contenido
 
 
-def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
+def _registro_de_fila(fila):
+    """El código de registro de una fila («0000122241 - 2026 - ...»), o "".
+
+    Es lo único que identifica la notificación: el índice es sólo su posición
+    y cambia en cuanto SUNAFIL reordena la bandeja.
+    """
+    for celda in _celdas(fila):
+        encontrado = REGISTRO_RE.search(celda)
+        if encontrado:
+            return encontrado.group(0).strip()
+    return ""
+
+
+def descargar_documento(
+    ruc, usuario, clave, etiqueta, indice, tipo="carta", registro_esperado=None
+):
     """Descarga un documento de una fila de la casilla de SUNAFIL.
 
     La casilla no expone una URL por documento: hay que abrir la bandeja,
@@ -1579,6 +1614,10 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
 
     Repite el login entero porque la sesión no se guarda entre peticiones.
     Devuelve `(nombre_sugerido, bytes)`.
+
+    Si se pasa `registro_esperado`, se compara con el registro de la fila
+    ANTES de pulsar nada: si no coincide, se lanza `ConflictoRegistro` en vez
+    de abrir el documento de otra notificación.
     """
     sesion = Sesion()
     code, state = autenticar_sunafil(ruc, usuario, clave, sesion=sesion)
@@ -1597,6 +1636,11 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
             f"La bandeja «{etiqueta}» tiene {len(filas)} filas y se pidió la "
             f"número {indice + 1}."
         )
+
+    if registro_esperado:
+        real = _registro_de_fila(filas[indice])
+        if real != str(registro_esperado).strip():
+            raise ConflictoRegistro(real, str(registro_esperado).strip())
 
     botones = _botones_de_fila(filas[indice])
     if not botones:
@@ -2062,10 +2106,20 @@ class Manejador(BaseHTTPRequestHandler):
             return
 
         tipo = str(cuerpo.get("tipo") or "carta")
+        registro_esperado = cuerpo.get("registro_esperado") or None
         try:
             nombre, contenido = descargar_documento(
-                ruc, usuario, clave, etiquetas[bandeja], indice, tipo
+                ruc,
+                usuario,
+                clave,
+                etiquetas[bandeja],
+                indice,
+                tipo,
+                registro_esperado=registro_esperado,
             )
+        except ConflictoRegistro as e:
+            self._responder(409, {"error": e.mensaje, "detalle": e.detalle})
+            return
         except SolError as e:
             self._responder(502, {"error": e.mensaje, "detalle": e.detalle})
             return

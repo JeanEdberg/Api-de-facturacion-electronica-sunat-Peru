@@ -9,6 +9,7 @@ use App\Services\BuzonService;
 use App\Services\CertificadoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -75,7 +76,37 @@ class NotificacionController extends Controller
             'certificado' => $company
                 ? $this->certificado->estado($company)
                 : ['tiene' => false, 'vencido' => false, 'por_vencer' => false],
+            'acuse' => $this->alertasDeAcuse($companyId),
         ];
+    }
+
+    /**
+     * Notificaciones de SUNAFIL sin acuse a las que se les acaba el plazo.
+     *
+     * Es sólo un aviso: el acuse no lo registra el ERP, lo registra la persona
+     * que abre la carta. Si la fecha estimada ya pasó, se dice también.
+     */
+    private function alertasDeAcuse(int $companyId): array
+    {
+        $aviso = (int) config('buzon.dias_aviso', 2);
+
+        return Notificacion::query()
+            ->where('company_id', $companyId)
+            ->where('entidad', 'SUNAFIL')
+            ->where('con_acuse', false)
+            ->whereNotNull('ultimo_dia_acuse_manual')
+            ->whereDate('ultimo_dia_acuse_manual', '<=', now()->addDays($aviso))
+            ->orderBy('ultimo_dia_acuse_manual')
+            ->get(['id', 'codigo', 'asunto', 'ultimo_dia_acuse_manual'])
+            ->map(fn (Notificacion $n) => [
+                'id' => $n->id,
+                'codigo' => $n->codigo,
+                'asunto' => $n->asunto,
+                'ultimo_dia_acuse' => $n->ultimo_dia_acuse_manual?->format('Y-m-d'),
+                'dias_restantes' => $n->diasParaAcuse(),
+                'vencido' => $n->diasParaAcuse() < 0,
+            ])
+            ->all();
     }
 
     public function store(Request $request): JsonResponse
@@ -250,16 +281,24 @@ class NotificacionController extends Controller
             'No tienes acceso a esta empresa.'
         );
 
-        $ruta = $this->service->rutaAdjunto($notificacion);
+        $tipo = (string) $request->query('tipo', 'carta');
+        $ruta = $this->service->rutaAdjunto($notificacion, $tipo);
 
-        // Si no hay archivo guardado se pide al puente en ese momento: así las
-        // constancias, que se bajan bajo demanda, no obligan a sincronizar
-        // todo el buzón para ver una.
+        // La carta NUNCA se baja aquí por iniciativa propia: pedirla a la
+        // casilla registra el acuse de recibo y arranca un plazo legal. Sólo
+        // se sirve si ya está guardada; para bajarla hay que usar /abrir.
+        // Si la notificación no salió de la casilla, no hay nada que abrir.
+        if (! $ruta && $tipo === 'carta' && $this->service->puedeAbrirse($notificacion)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'La carta aún no está abierta. Usa «Abrir y notificarse» para descargarla y registrar el acuse.',
+                'requiere_apertura' => true,
+            ], 409);
+        }
+
+        // Las constancias sí pueden bajarse bajo demanda: no tienen efecto legal.
         if (! $ruta) {
-            $resultado = $this->service->descargarDocumento(
-                $notificacion,
-                (string) $request->query('tipo', 'carta')
-            );
+            $resultado = $this->service->descargarDocumento($notificacion, $tipo);
 
             if (! ($resultado['ok'] ?? false)) {
                 return response()->json([
@@ -268,7 +307,7 @@ class NotificacionController extends Controller
                 ], 404);
             }
 
-            $ruta = $this->service->rutaAdjunto($notificacion->refresh());
+            $ruta = $this->service->rutaAdjunto($notificacion->refresh(), $tipo);
         }
 
         if (! $ruta) {
@@ -287,6 +326,38 @@ class NotificacionController extends Controller
      * Es el camino de las constancias de SUNAFIL, que no se bajan al
      * sincronizar porque no tienen plazo que responder.
      */
+    /**
+     * «Abrir y notificarse»: baja la carta y registra el acuse de recibo.
+     *
+     * Es la única vía que abre la carta. Exige permiso explícito y que el
+     * usuario confirme, porque el acuse arranca un plazo legal contra la
+     * empresa y no se puede deshacer desde el ERP.
+     */
+    public function abrir(Request $request, Notificacion $notificacion): JsonResponse
+    {
+        abort_if(
+            ! $request->user()?->canAccessCompany($notificacion->company_id),
+            403,
+            'No tienes acceso a esta empresa.'
+        );
+
+        abort_unless(
+            Gate::allows('abrir-notificacion-sunafil', $notificacion),
+            403,
+            'No tienes permiso para abrir notificaciones de SUNAFIL.'
+        );
+
+        $request->validate(['confirmo' => ['accepted']]);
+
+        $resultado = $this->service->abrir($notificacion, (int) $request->user()->id);
+
+        return response()->json([
+            'success' => (bool) $resultado['ok'],
+            'message' => $resultado['message'],
+            'data' => $resultado,
+        ], $resultado['ok'] ? 200 : 502);
+    }
+
     public function descargarDocumento(Request $request, Notificacion $notificacion): JsonResponse
     {
         abort_if(
