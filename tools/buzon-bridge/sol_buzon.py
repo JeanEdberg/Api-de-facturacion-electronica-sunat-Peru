@@ -130,9 +130,19 @@ ESTRATEGIAS_TLS = (
 )
 
 
-def _contexto_tls(cifrados=None, minimo=None):
-    """Contexto TLS para hablar con la casilla de SUNAFIL."""
-    contexto = ssl.create_default_context()
+def _contexto_tls(cifrados=None, minimo=None, verificar=True):
+    """Contexto TLS para hablar con la casilla de SUNAFIL.
+
+    `verificar=False` sólo se usa cuando el saludo TLS funciona pero el
+    certificado no valida: ahí el cifrado sí se negocia y lo único que impide
+    seguir es la cadena del certificado.
+    """
+    if verificar:
+        contexto = ssl.create_default_context()
+    else:
+        contexto = ssl.create_default_context()
+        contexto.check_hostname = False
+        contexto.verify_mode = ssl.CERT_NONE
     if cifrados:
         try:
             contexto.set_ciphers(cifrados)
@@ -156,22 +166,33 @@ def detectar_contexto_tls(host, puerto=443, timeout=TIEMPO_SONDA):
     negocio TLS" ahorra diagnosticar a ciegas.
     """
     fallos = []
+    # `CERTIFICATE_VERIFY_FAILED` no es un fallo de cifrado: el saludo TLS se
+    # negoció y sólo falló la validación del certificado. Se reintenta sin
+    # verificar en vez de descartar la configuración, que era lo que dejaba
+    # al puente sin ninguna opción válida.
     for nombre, cifrados, minimo in ESTRATEGIAS_TLS:
-        contexto = _contexto_tls(cifrados, minimo)
-        try:
-            with socket.create_connection((host, puerto), timeout=timeout) as crudo:
-                with contexto.wrap_socket(crudo, server_hostname=host) as tls:
-                    tls.version()
-            return contexto, nombre
-        except ssl.SSLError as e:
-            motivo = getattr(e, "reason", None) or str(e)
-            fallos.append(f"{nombre}: TLS {motivo}")
-        except OSError as e:
-            raise SolError(
-                f"No se pudo conectar con {host}. Comprueba que este servidor "
-                "tiene salida a internet hacia ese host.",
-                detalle=str(e),
-            )
+        for verificar in (True, False):
+            contexto = _contexto_tls(cifrados, minimo, verificar)
+            etiqueta = nombre if verificar else f"{nombre} (sin verificar)"
+            try:
+                with socket.create_connection((host, puerto), timeout=timeout) as crudo:
+                    with contexto.wrap_socket(crudo, server_hostname=host) as tls:
+                        tls.version()
+                return contexto, etiqueta
+            except ssl.SSLCertVerificationError as e:
+                motivo = getattr(e, "verify_message", None) or "certificado no válido"
+                fallos.append(f"{etiqueta}: certificado ({motivo})")
+                continue
+            except ssl.SSLError as e:
+                motivo = getattr(e, "reason", None) or str(e)
+                fallos.append(f"{etiqueta}: TLS {motivo}")
+                break
+            except OSError as e:
+                raise SolError(
+                    f"No se pudo conectar con {host}. Comprueba que este servidor "
+                    "tiene salida a internet hacia ese host.",
+                    detalle=str(e),
+                )
     raise SolError(
         f"El servidor de {host} rechaza todas las configuraciones TLS que "
         "probó el puente. Suele indicar que el host cambió su configuración.",

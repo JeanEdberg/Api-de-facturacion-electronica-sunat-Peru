@@ -180,6 +180,29 @@ El 500 viene del servidor de SUNAFIL, no del cliente: la acción **se ejecuta**
 (por eso ya no devuelve la página de la bandeja), pero falla dentro. Falta
 averiguar qué espera esa vista.
 
+## TLS: el certificado de SUNAFIL no valida
+
+La casilla usa un servidor antiguo. Al probar el saludo TLS:
+
+```
+por defecto: SSLV3_ALERT_HANDSHAKE_FAILURE   <- el cifrado no se negocia
+SECLEVEL=1:  CERTIFICATE_VERIFY_FAILED       <- el cifrado SÍ se negocia
+SECLEVEL=0:  CERTIFICATE_VERIFY_FAILED       <- el cifrado SÍ se negocia
+```
+
+`CERTIFICATE_VERIFY_FAILED` no es un fallo de cifrado: el saludo se completó y
+solo falló la validación del certificado. El puente lo trataba como un fallo
+más y descartaba esas configuraciones, quedándose sin ninguna opción.
+
+Ahora, cuando el fallo es **del certificado**, se reintenta la misma
+configuración sin verificar. Si el fallo es del saludo, se pasa a la
+siguiente. Se conserva la verificación siempre que el certificado valide.
+
+**Consecuencia**: en ese caso la conexión no valida el certificado, así que no
+se detectaría un servidor suplantado. Es el precio de hablar con un servidor
+cuyo certificado no valida desde esta máquina. La alternativa sería instalar
+la CA que falta en el almacén de confianza del sistema.
+
 ## Detalles que importan
 
 - **`ViewState`**: es de la vista, no del formulario. Los diálogos de

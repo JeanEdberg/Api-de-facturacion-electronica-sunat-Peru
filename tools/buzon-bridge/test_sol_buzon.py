@@ -846,6 +846,84 @@ class EleccionDelBotonDeDescargaTest(unittest.TestCase):
         self.assertEqual(len(nombres), 3)
 
 
+class DetectarTlsTest(unittest.TestCase):
+    """El certificado de SUNAFIL no valida, pero el cifrado sí se negocia.
+
+    Antes se trataba `CERTIFICATE_VERIFY_FAILED` como un fallo de cifrado y se
+    descartaba la configuración, dejando al puente sin ninguna opción.
+    """
+
+    def _simular(self, fallos):
+        """`fallos` = lista de excepciones a lanzar, en orden. None = éxito."""
+        intentos = []
+
+        class FalsoSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class FalsoTls(FalsoSocket):
+            def version(self):
+                return "TLSv1.2"
+
+        def falso_create(*a, **k):
+            intentos.append(len(intentos))
+            fallo = fallos[len(intentos) - 1] if len(intentos) <= len(fallos) else None
+            if fallo:
+                raise fallo
+            return FalsoSocket()
+
+        def falso_wrap(socket_, server_hostname=None):
+            # Se reutiliza el mismo contador que create_connection.
+            return FalsoTls()
+
+        parches = [
+            mock.patch.object(puente.socket, "create_connection", falso_create),
+            mock.patch.object(
+                puente.ssl.SSLContext, "wrap_socket", lambda *a, **k: FalsoTls()
+            ),
+        ]
+        for parche in parches:
+            parche.start()
+            self.addCleanup(parche.stop)
+        return intentos
+
+    def test_si_el_certificado_no_valida_usa_sin_verificar(self):
+        error_cert = puente.ssl.SSLCertVerificationError(
+            1, "certificate verify failed"
+        )
+        # 1er intento: certificado. 2º: sin verificar -> éxito.
+        intentos = self._simular([error_cert])
+
+        contexto, nombre = puente.detectar_contexto_tls("casilla.test")
+
+        self.assertIn("sin verificar", nombre)
+        self.assertEqual(contexto.verify_mode, puente.ssl.CERT_NONE)
+        self.assertFalse(contexto.check_hostname)
+        self.assertEqual(len(intentos), 2)
+
+    def test_si_el_saludo_falla_pasa_a_la_siguiente_estrategia(self):
+        error_saludo = puente.ssl.SSLError(1, "handshake failure")
+        error_saludo.reason = "SSLV3_ALERT_HANDSHAKE_FAILURE"
+        # El fallo de cifrado corta la variante sin verificar, así que un
+        # fallo consume una estrategia entera: con uno, cae en la segunda.
+        self._simular([error_saludo])
+
+        contexto, nombre = puente.detectar_contexto_tls("casilla.test")
+
+        self.assertEqual(nombre, "SECLEVEL=1")
+
+    def test_conserva_la_verificacion_cuando_el_certificado_es_valido(self):
+        self._simular([])
+
+        contexto, nombre = puente.detectar_contexto_tls("casilla.test")
+
+        self.assertEqual(nombre, "por defecto")
+        self.assertEqual(contexto.verify_mode, puente.ssl.CERT_REQUIRED)
+
+
 class CartaCamposExactosTest(unittest.TestCase):
     """La carta usa los campos copiados de la petición real del navegador.
 
