@@ -16,6 +16,20 @@ php artisan test --filter=BuzonTest   # solo el buzón
 Login de los usuarios seed: `POST /api/auth/login` (**sin** `v1`), token en
 `access_token`. `admin@sunatapi.com` / `admin123456`.
 
+### Los tests borran la base de desarrollo si falta `force`
+
+`phpunit.xml` fija `DB_CONNECTION` y `DB_DATABASE` con `force="true"` **y**
+entradas `<server>`. No quitar ninguna de las dos cosas: Laravel lee `$_SERVER`
+antes que `$_ENV`, así que un `DB_DATABASE` exportado en el shell gana y
+`RefreshDatabase` vacía `database/demo.sqlite` en vez de la base de tests.
+
+Si ya pasó, la demo se reconstruye con:
+
+```bash
+php artisan migrate:fresh --seed --seeder=RolesAndPermissionsSeeder
+php artisan db:seed --class=InmoaSeeder
+```
+
 ## Buzón SUNAT: cosas que cuestan tiempo redescubrir
 
 - **El Menú SOL es OAuth2.** Un POST directo a `j_security_check` con
