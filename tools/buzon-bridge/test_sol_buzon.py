@@ -14,6 +14,7 @@ import urllib.parse
 from unittest import mock
 
 import sol_buzon as puente
+import carta_sunafil
 
 
 class AutenticarSunafilTest(unittest.TestCase):
@@ -545,11 +546,17 @@ class DescargarDocumentoTest(unittest.TestCase):
         )
 
     def _descargar(self, tipo="constancia_deposito", botones=None, indice=0):
+        """Descarga con la sesión simulada.
+
+        La carta usa primero `carta_sunafil` (campos exactos del navegador) y
+        sólo cae al camino genérico si eso falla, así que los tests del camino
+        genérico desactivan el módulo a propósito.
+        """
         with mock.patch.object(
             puente, "autenticar_sunafil", return_value=("C", "S")
         ), mock.patch.object(
             puente, "_abrir_bandeja", return_value=("http://u/Empleador", self._acciones(botones))
-        ):
+        ), mock.patch.object(puente, "carta_sunafil", None):
             return puente.descargar_documento(
                 "20614684772", "MODDATOS", "clave", "Acciones Previas", indice, tipo
             )
@@ -682,7 +689,7 @@ class DescargarDocumentoTest(unittest.TestCase):
                 "http://casilla/vista",
                 self._acciones(BOTON_CARTA) + DIALOGO_CON_VER_Y_DESCARGAR,
             ),
-        ):
+        ), mock.patch.object(puente, "carta_sunafil", None):
             nombre, contenido = puente.descargar_documento(
                 "20614684772", "MODDATOS", "clave", "Acciones Previas", 0, "carta"
             )
@@ -708,7 +715,7 @@ class DescargarDocumentoTest(unittest.TestCase):
             return_value=(
                 "http://casilla/vista", self._acciones(BOTON_CARTA) + DIALOGO_DESCARGA
             ),
-        ):
+        ), mock.patch.object(puente, "carta_sunafil", None):
             nombre, contenido = puente.descargar_documento(
                 "20614684772", "MODDATOS", "clave", "Acciones Previas", 0, "carta"
             )
@@ -837,6 +844,54 @@ class EleccionDelBotonDeDescargaTest(unittest.TestCase):
 
         self.assertIn("formDescargaDoc:j_idt179", nombres)
         self.assertEqual(len(nombres), 3)
+
+
+class CartaCamposExactosTest(unittest.TestCase):
+    """La carta usa los campos copiados de la petición real del navegador.
+
+    El camino genérico deducía los campos del HTML y SUNAFIL respondía 500;
+    estos tests fijan lo que se envía para que no vuelva a derivar.
+    """
+
+    def test_el_paso_4_es_ajax_y_lleva_los_filtros(self):
+        campos = dict(carta_sunafil.campos_clic_carta("VS:1", "formactosAdministrativos:dtAlertas:0:j_idt108"))
+
+        self.assertEqual(campos["javax.faces.partial.ajax"], "true")
+        self.assertEqual(campos["javax.faces.partial.event"], "click")
+        self.assertEqual(campos["formactosAdministrativos"], "formactosAdministrativos")
+        self.assertEqual(campos["formactosAdministrativos:cbEstadoInner"], "-1")
+        self.assertEqual(campos["formactosAdministrativos:dtAlertas_length"], "10")
+
+    def test_el_paso_4_no_envia_partial_render(self):
+        """El navegador no lo manda; enviarlo desviaba la respuesta."""
+        campos = dict(carta_sunafil.campos_clic_carta("VS:1", "b"))
+        self.assertNotIn("javax.faces.partial.render", campos)
+
+    def test_el_paso_4_ejecuta_el_boton_y_el_formulario(self):
+        boton = "formactosAdministrativos:dtAlertas:0:j_idt108"
+        campos = dict(carta_sunafil.campos_clic_carta("VS:1", boton))
+
+        self.assertEqual(
+            campos["javax.faces.partial.execute"], boton + " formactosAdministrativos"
+        )
+
+    def test_el_paso_5_usa_btnverdocumento_con_valor_vacio(self):
+        """No es un id generado: se llama siempre btnverDocumento."""
+        campos = dict(carta_sunafil.campos_descarga("VS:2"))
+
+        self.assertEqual(campos["formDescargaDoc:btnverDocumento"], "")
+        self.assertEqual(campos["formDescargaDoc"], "formDescargaDoc")
+        self.assertEqual(
+            campos["formDescargaDoc_panelDescargaDoc_collapsed"], "false"
+        )
+
+    def test_lee_el_viewstate_de_una_respuesta_ajax(self):
+        xml = (
+            '<partial-response><changes>'
+            '<update id="javax.faces.ViewState"><![CDATA[VS:9]]></update>'
+            "</changes></partial-response>"
+        )
+        self.assertEqual(carta_sunafil.viewstate_de(xml), "VS:9")
 
 
 class ViewStateDelDialogoTest(unittest.TestCase):

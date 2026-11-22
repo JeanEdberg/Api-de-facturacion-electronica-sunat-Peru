@@ -137,13 +137,44 @@ En Chrome o Edge, con F12 abierto en la pestaña **Red**:
 
 Si la URL o los campos no coinciden, ahí está el fallo.
 
+## La carta usa campos fijos (carta_sunafil.py)
+
+Deducir los campos del HTML no funcionaba: SUNAFIL respondía 500 dentro de la
+vista `/jsfDocs/modulos/...`. Los campos reales están copiados de la petición
+del navegador y viven en `carta_sunafil.py`.
+
+**Paso 4** — además del botón y el `ViewState`, el navegador envía:
+
+| campo | valor |
+|---|---|
+| `formactosAdministrativos` | `formactosAdministrativos` |
+| `...:fecInicial`, `...:fecFinal` | vacío |
+| `...:cbEstadoInner`, `...:cbTipReqInner` | `-1` |
+| `...:dtAlertas_length` | `10` |
+| `javax.faces.partial.ajax` | `true` |
+| `javax.faces.partial.event` | `click` |
+| `javax.faces.partial.execute` | `<botón> formactosAdministrativos` |
+
+Y **no** envía `javax.faces.partial.render`, que el puente mandaba de más.
+
+**Paso 5** — el botón es siempre `formDescargaDoc:btnverDocumento` con valor
+**vacío**. No es un `j_idtNN` generado, y no hay que adivinarlo entre varios.
+Además se envía `formDescargaDoc` y
+`formDescargaDoc_panelDescargaDoc_collapsed=false`.
+
+La hipótesis del 500: si el paso 4 no se procesa como AJAX de PrimeFaces, el
+servidor no registra qué fila se eligió; el paso 5 llega sin documento
+seleccionado y la vista falla por dentro.
+
+Las constancias no pasan por aquí: siguen con el envío normal del formulario.
+
 ## Estado conocido
 
 | documento | estado |
 |---|---|
 | `constancia_deposito` | descarga un PDF válido |
 | `constancia_acuse` | descarga un PDF válido |
-| `carta` | **falla**: el paso 5 devuelve `500 Error interno del servidor`, con `viewId:/jsfDocs/modulos/actosAd...` |
+| `carta` | usa los campos exactos del navegador (pendiente de confirmar contra SUNAFIL real) |
 
 El 500 viene del servidor de SUNAFIL, no del cliente: la acción **se ejecuta**
 (por eso ya no devuelve la página de la bandeja), pero falla dentro. Falta

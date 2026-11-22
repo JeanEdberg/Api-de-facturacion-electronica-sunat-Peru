@@ -72,6 +72,11 @@ import urllib.request
 import warnings
 from datetime import date, datetime, timedelta
 from html import unescape
+
+try:
+    import carta_sunafil
+except ImportError:  # el módulo es opcional: sin él sólo se pierde la carta
+    carta_sunafil = None
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MENU = "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm"
@@ -1481,6 +1486,65 @@ def _guardar(nombre, html):
     sys.stderr.write(f"[sol-bridge] guardado {ruta} ({len(html)} B)\n")
 
 
+def _enviar_documento(sesion, url_bandeja):
+    """Adaptador `enviar(url, campos, ajax=False)` para `carta_sunafil`.
+
+    Recibe los campos como lista de tuplas, en orden, porque JSF es sensible
+    al orden y a los duplicados. Devuelve `(estado, cabeceras, cuerpo)`.
+    """
+
+    def enviar(url, campos, ajax=False):
+        cuerpo = urllib.parse.urlencode(campos, quote_via=urllib.parse.quote).encode()
+        peticion = urllib.request.Request(url, data=cuerpo, method="POST")
+        peticion.add_header(
+            "Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"
+        )
+        peticion.add_header("Referer", url_bandeja)
+        peticion.add_header("Origin", URL_CASILLA_SUNAFIL)
+        if ajax:
+            peticion.add_header("Faces-Request", "partial/ajax")
+            peticion.add_header("X-Requested-With", "XMLHttpRequest")
+            peticion.add_header("Accept", "application/xml, text/xml, */*; q=0.01")
+        try:
+            with sesion.opener.open(peticion, timeout=sesion.timeout) as r:
+                return r.status, dict(r.headers), r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read()
+        except (urllib.error.URLError, OSError) as e:
+            raise SolError(
+                "No se pudo descargar el documento de la casilla.", detalle=str(e)
+            )
+
+    return enviar
+
+
+def _carta_con_campos_exactos(sesion, url_bandeja, html_bandeja, boton):
+    """Descarga la carta con los campos que envía el navegador, no con los que
+    el puente deducía del HTML.
+
+    Los campos están copiados de la petición real (ver `carta_sunafil.py`).
+    Devolver `None` significa «no se pudo por esta vía»: el llamador sigue con
+    el camino genérico.
+    """
+    if carta_sunafil is None:
+        return None
+
+    viewstate = _viewstate_opcional(html_bandeja)
+    if not viewstate:
+        return None
+
+    try:
+        nombre, contenido = carta_sunafil.descargar_carta(
+            _enviar_documento(sesion, url_bandeja), url_bandeja, viewstate, boton
+        )
+    except carta_sunafil.ErrorCarta as e:
+        raise SolError(
+            "No se pudo descargar la carta con los campos del navegador.",
+            detalle=str(e),
+        )
+    return nombre, contenido
+
+
 def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
     """Descarga un documento de una fila de la casilla de SUNAFIL.
 
@@ -1523,6 +1587,17 @@ def descargar_documento(ruc, usuario, clave, etiqueta, indice, tipo="carta"):
             detalle="Botones con title: "
             + ", ".join(b["titulo"] for b in botones.values()),
         )
+
+    # La carta tiene un flujo propio: su clic exige AJAX con unos filtros
+    # concretos y su descarga usa un botón fijo. Los campos están copiados de
+    # la petición real del navegador, porque deducirlos del HTML llevaba a un
+    # 500 dentro de SUNAFIL. Las constancias no pasan por aquí.
+    if tipo == "carta":
+        resultado = _carta_con_campos_exactos(
+            sesion, url_bandeja, html, botones["carta"]["boton"]
+        )
+        if resultado:
+            return resultado
 
     # El formulario se envía con el botón pulsado: `name` del botón, sus campos
     # ocultos y el ViewState de la página de la bandeja (no el de inicio).
