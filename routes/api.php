@@ -23,6 +23,11 @@ use App\Http\Controllers\Api\UbigeoController;
 use App\Http\Controllers\Api\CreditNoteController;
 use App\Http\Controllers\Api\DebitNoteController;
 use App\Http\Controllers\Api\DispatchGuideController;
+use App\Http\Controllers\Api\BulkController;
+use App\Http\Controllers\Api\HistoricalController;
+use App\Http\Controllers\Api\DailySummaryController;
+use App\Http\Controllers\Api\RetentionController;
+use App\Http\Controllers\Api\VoidedDocumentController;
 use App\Http\Controllers\Api\GreCredentialsController;
 
 // ========================
@@ -305,6 +310,63 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'active'])->group(function () {
         Route::get('/{id}/download-pdf', [DispatchGuideController::class, 'downloadPdf']);
         Route::post('/{id}/generate-pdf', [DispatchGuideController::class, 'generatePdf']);
         Route::post('/{id}/send-sunat', [DispatchGuideController::class, 'sendToSunat']);
+    });
+
+    // ========================
+    // CARGA MASIVA
+    // ========================
+    Route::prefix('bulk')->group(function () {
+        Route::get('/plantilla', [BulkController::class, 'plantilla']);
+        Route::post('/documentos', [BulkController::class, 'store']);
+    });
+
+    // ========================
+    // IMPORTACIÓN HISTÓRICA
+    // ========================
+    Route::prefix('historical')->group(function () {
+        Route::get('/plantilla', [HistoricalController::class, 'plantilla']);
+        Route::post('/importar', [HistoricalController::class, 'importar']);
+    });
+
+    // ========================
+    // RESÚMENES DIARIOS (BOLETAS)
+    // ========================
+    Route::prefix('daily-summaries')->group(function () {
+        Route::get('/pending', [DailySummaryController::class, 'pending']);
+        Route::get('/', [DailySummaryController::class, 'index']);
+        Route::post('/', [DailySummaryController::class, 'store']);
+        Route::get('/{id}', [DailySummaryController::class, 'show']);
+        Route::get('/{id}/download-xml', [DailySummaryController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [DailySummaryController::class, 'downloadCdr']);
+        Route::get('/{id}/download-pdf', [DailySummaryController::class, 'downloadPdf']);
+        Route::post('/{id}/send-sunat', [DailySummaryController::class, 'sendToSunat']);
+        Route::post('/{id}/check-status', [DailySummaryController::class, 'checkStatus']);
+    });
+
+    // ========================
+    // RETENCIONES (TIPO 20)
+    // ========================
+    Route::prefix('retentions')->group(function () {
+        Route::get('/', [RetentionController::class, 'index']);
+        Route::post('/', [RetentionController::class, 'store']);
+        Route::get('/{id}', [RetentionController::class, 'show']);
+        Route::get('/{id}/download-xml', [RetentionController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [RetentionController::class, 'downloadCdr']);
+        Route::post('/{id}/send-sunat', [RetentionController::class, 'sendToSunat']);
+    });
+
+    // ========================
+    // COMUNICACIÓN DE BAJA (ANULACIÓN)
+    // ========================
+    Route::prefix('voided-documents')->group(function () {
+        Route::get('/candidates', [VoidedDocumentController::class, 'candidates']);
+        Route::get('/', [VoidedDocumentController::class, 'index']);
+        Route::post('/', [VoidedDocumentController::class, 'store']);
+        Route::get('/{id}', [VoidedDocumentController::class, 'show']);
+        Route::get('/{id}/download-xml', [VoidedDocumentController::class, 'downloadXml']);
+        Route::get('/{id}/download-cdr', [VoidedDocumentController::class, 'downloadCdr']);
+        Route::post('/{id}/send-sunat', [VoidedDocumentController::class, 'sendToSunat']);
+        Route::post('/{id}/check-status', [VoidedDocumentController::class, 'checkStatus']);
     });
 
     // ========================
