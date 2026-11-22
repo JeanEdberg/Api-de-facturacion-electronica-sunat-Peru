@@ -76,6 +76,129 @@ class BuzonService
         return $notificacion->refresh();
     }
 
+    /**
+     * Descarga del puente el documento de una notificación y lo guarda.
+     *
+     * El puente no expone una URL por documento: hay que decirle la bandeja y
+     * la fila, que se guardan en `detalle` al sincronizar. Si la notificación
+     * no trae esos datos no se intenta nada, porque adivinar la fila bajaría
+     * el documento de otra notificación.
+     *
+     * @return array{ok: bool, archivo?: string, bytes?: int, message?: string}
+     */
+    public function descargarDocumento(Notificacion $notificacion, string $tipo = 'carta'): array
+    {
+        $origen = $this->origenDocumento($notificacion);
+
+        if (! $origen) {
+            return [
+                'ok' => false,
+                'message' => 'La notificación no dice de qué bandeja ni de qué fila salió, así que no se puede pedir el documento al puente.',
+            ];
+        }
+
+        $company = $notificacion->company;
+        $endpoint = $this->endpointDocumento($company, $origen['entidad']);
+
+        if (! $endpoint) {
+            return [
+                'ok' => false,
+                'message' => "No hay endpoint del puente configurado para {$origen['entidad']}.",
+            ];
+        }
+
+        try {
+            $respuesta = Http::timeout(180)
+                ->acceptJson()
+                ->withHeaders(['User-Agent' => 'BuzonSUNAT/1.0'])
+                ->when($company->buzon_token ?: config('services.buzon.token'), fn ($http, $valor) => $http->withToken($valor))
+                ->post($endpoint, [
+                    'ruc' => $company->ruc,
+                    'usuario' => $company->usuario_sol,
+                    'clave' => $company->clave_sol,
+                    'bandeja' => $origen['bandeja'],
+                    'indice' => $origen['indice'],
+                    'tipo' => $tipo,
+                ]);
+        } catch (\Illuminate\Http\Client\ConnectionException) {
+            return [
+                'ok' => false,
+                'message' => "No se pudo llegar al puente en {$endpoint}. Revisa que esté levantado.",
+            ];
+        }
+
+        $error = $respuesta->json('error');
+        if (is_string($error) && $error !== '') {
+            return ['ok' => false, 'message' => $error];
+        }
+
+        if (! $respuesta->successful()) {
+            return [
+                'ok' => false,
+                'message' => "El puente respondió HTTP {$respuesta->status()} al pedir el documento.",
+            ];
+        }
+
+        $contenido = $respuesta->body();
+        if (! str_starts_with($contenido, '%PDF')) {
+            return [
+                'ok' => false,
+                'message' => 'El puente no devolvió un PDF. Suele pasar cuando SUNAFIL abre un visor en vez del archivo.',
+            ];
+        }
+
+        $ruta = "buzon/{$notificacion->company_id}/{$notificacion->id}.pdf";
+        Storage::disk('public')->put($ruta, $contenido);
+        $notificacion->update(['adjunto_path' => $ruta, 'tiene_adjunto' => true]);
+
+        Log::info('Documento del buzón descargado', [
+            'notificacion_id' => $notificacion->id,
+            'tipo' => $tipo,
+            'bytes' => strlen($contenido),
+        ]);
+
+        return ['ok' => true, 'archivo' => $ruta, 'bytes' => strlen($contenido)];
+    }
+
+    /**
+     * Bandeja y fila de las que salió la notificación, leídas de `detalle`.
+     *
+     * @return array{bandeja: string, indice: int, entidad: string}|null
+     */
+    private function origenDocumento(Notificacion $notificacion): ?array
+    {
+        $detalle = json_decode((string) $notificacion->detalle, true);
+
+        if (! is_array($detalle) || ! isset($detalle['bandeja'], $detalle['indice'])) {
+            return null;
+        }
+
+        if (! is_numeric($detalle['indice'])) {
+            return null;
+        }
+
+        return [
+            'bandeja' => (string) $detalle['bandeja'],
+            'indice' => (int) $detalle['indice'],
+            'entidad' => strtoupper((string) $notificacion->entidad),
+        ];
+    }
+
+    /**
+     * URL del endpoint de documentos. El puente sirve el buzón en `/buzon` y
+     * los archivos en `/documento`, así que se deriva del de sincronización.
+     */
+    private function endpointDocumento(Company $company, string $entidad): ?string
+    {
+        $buzon = $this->fuentes($company)[$entidad] ?? null;
+
+        if (! $buzon) {
+            return null;
+        }
+
+        return preg_replace('#/buzon/?$#', '/documento', $buzon);
+    }
+
     public function rutaAdjunto(Notificacion $notificacion): ?string
     {
         $ruta = $notificacion->adjunto_path;
@@ -202,17 +325,76 @@ class BuzonService
         }
 
         $importadas = 0;
+        $descargadas = 0;
         foreach ($fuentes as $nombre => $endpoint) {
             $importadas += $this->importarDesde($company, $nombre, $endpoint);
+        }
+
+        // Las cartas de SUNAFIL llevan plazo legal, así que se bajan en la
+        // misma pasada: esperar a que alguien abra la notificación puede
+        // dejar el plazo vencido. Las constancias van bajo demanda porque
+        // nadie las necesita para responder a tiempo.
+        if ($entidad === null || $entidad === 'SUNAFIL') {
+            $descargadas = $this->descargarCartasPendientes($company);
         }
 
         Log::info('Buzón sincronizado', [
             'company_id' => $company->id,
             'entidad' => $entidad,
             'importadas' => $importadas,
+            'cartas_descargadas' => $descargadas,
         ]);
 
-        return ['importadas' => $importadas, 'fuentes' => array_values($fuentes)];
+        return [
+            'importadas' => $importadas,
+            'cartas_descargadas' => $descargadas,
+            'fuentes' => array_values($fuentes),
+        ];
+    }
+
+    /**
+     * Baja la carta de las acciones previas de SUNAFIL que aún no la tienen.
+     *
+     * Sólo se intenta con las que traen bandeja e índice; el resto se deja
+     * como está para que un fallo no corte la sincronización entera.
+     */
+    private function descargarCartasPendientes(Company $company): int
+    {
+        $pendientes = Notificacion::query()
+            ->where('company_id', $company->id)
+            ->where('entidad', 'SUNAFIL')
+            ->where('tiene_adjunto', false)
+            ->get();
+
+        $descargadas = 0;
+
+        foreach ($pendientes as $notificacion) {
+            if (! $this->origenDocumento($notificacion)) {
+                continue;
+            }
+
+            try {
+                $resultado = $this->descargarDocumento($notificacion, 'carta');
+            } catch (\Throwable $e) {
+                Log::warning('No se pudo bajar la carta del buzón', [
+                    'notificacion_id' => $notificacion->id,
+                    'error' => $e->getMessage(),
+                ]);
+
+                continue;
+            }
+
+            if ($resultado['ok']) {
+                $descargadas++;
+            } else {
+                Log::info('Carta del buzón no disponible', [
+                    'notificacion_id' => $notificacion->id,
+                    'motivo' => $resultado['message'] ?? 'sin detalle',
+                ]);
+            }
+        }
+
+        return $descargadas;
     }
 
     /**
@@ -265,14 +447,18 @@ class BuzonService
         $importadas = 0;
 
         foreach ($items as $item) {
+            $detalle = $this->detalleConOrigen($item);
+
             $notificacion = $this->registrar([
                 'company_id' => $company->id,
                 'entidad' => strtoupper($item['entidad'] ?? $entidad),
-                'codigo' => $item['codigo'] ?? $item['numero'] ?? null,
-                'asunto' => $item['asunto'] ?? $item['titulo'] ?? 'Notificación',
+                'codigo' => $item['codigo'] ?? $item['numero'] ?? $item['registro'] ?? null,
+                'asunto' => $item['asunto'] ?? $item['titulo'] ?? $item['tipo_requerimiento'] ?? 'Notificación',
                 'tipo' => $item['tipo'] ?? null,
-                'fecha' => $item['fecha'] ?? null,
-                'detalle' => $item['detalle'] ?? null,
+                'fecha' => $this->fechaNormalizada(
+                    $item['fecha'] ?? $item['fecha_notificacion'] ?? $item['fecha_deposito'] ?? null
+                ),
+                'detalle' => $detalle,
                 'url' => $item['url'] ?? null,
                 'origen' => 'sincronizada',
             ]);
@@ -283,6 +469,65 @@ class BuzonService
         }
 
         return $importadas;
+    }
+
+    /**
+     * Fecha en formato ISO, o `null` si no se puede interpretar.
+     *
+     * SUNAFIL devuelve `d/m/Y` y la columna es un `date` de Eloquent, que
+     * espera ISO: pasarle `23/10/2026` lanzaba una excepción y tumbaba la
+     * sincronización entera con un 502.
+     */
+    private function fechaNormalizada(mixed $valor): ?string
+    {
+        if (! is_string($valor) || trim($valor) === '') {
+            return null;
+        }
+
+        $texto = trim($valor);
+
+        foreach (['d/m/Y', 'd-m-Y', 'Y-m-d'] as $formato) {
+            $fecha = \DateTimeImmutable::createFromFormat('!'.$formato, $texto);
+
+            if ($fecha && $fecha->format($formato) === $texto) {
+                return $fecha->format('Y-m-d');
+            }
+        }
+
+        try {
+            return (new \DateTimeImmutable($texto))->format('Y-m-d');
+        } catch (\Exception) {
+            return null;
+        }
+    }
+
+    /**
+     * `detalle` de la notificación, con la bandeja y la fila de origen.
+     *
+     * Las acciones previas de SUNAFIL sólo se pueden pedir al puente por
+     * bandeja e índice, así que esos dos datos tienen que viajar con la
+     * notificación; si se perdieran, el documento ya no se podría descargar.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function detalleConOrigen(array $item): ?string
+    {
+        $detalle = $item['detalle'] ?? null;
+        $datos = is_string($detalle) ? json_decode($detalle, true) : null;
+
+        if (! is_array($datos)) {
+            $datos = [];
+        }
+
+        if (isset($item['bandeja'])) {
+            $datos['bandeja'] = $item['bandeja'];
+        }
+
+        if (isset($item['indice']) && is_numeric($item['indice'])) {
+            $datos['indice'] = (int) $item['indice'];
+        }
+
+        return $datos === [] ? $detalle : json_encode($datos, JSON_UNESCAPED_UNICODE);
     }
 
     /**
@@ -325,6 +570,71 @@ class BuzonService
 
         $items = $respuesta->json('data') ?? $respuesta->json() ?? [];
 
-        return is_array($items) ? array_values(array_filter($items, 'is_array')) : [];
+        if (! is_array($items)) {
+            return [];
+        }
+
+        return $this->normalizarItems($items);
+    }
+
+    /**
+     * Deja la respuesta del puente en una lista plana de notificaciones.
+     *
+     * SUNAT devuelve una lista. SUNAFIL devuelve un objeto con una clave por
+     * bandeja (`notificaciones`, `acciones_previas`), así que sin aplanarlo el
+     * `array_filter(is_array)` se quedaba con las dos listas y no con sus
+     * filas: SUNAFIL nunca importaba nada.
+     *
+     * @param  array<mixed>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    private function normalizarItems(array $items): array
+    {
+        $planos = [];
+
+        foreach ($items as $clave => $valor) {
+            if (! is_array($valor)) {
+                continue;
+            }
+
+            // Lista de filas: SUNAT, o una bandeja de SUNAFIL (que también es
+            // una lista). Si la clave es el nombre de la bandeja, cada fila la
+            // hereda: es lo único que permite pedir luego su documento.
+            if (array_is_list($valor)) {
+                foreach ($valor as $fila) {
+                    if (! is_array($fila)) {
+                        continue;
+                    }
+
+                    if (is_string($clave)) {
+                        $fila['bandeja'] = $fila['bandeja'] ?? $clave;
+                    }
+
+                    $planos[] = $fila;
+                }
+
+                continue;
+            }
+
+            // Un objeto suelto con datos: es una sola notificación.
+            if (isset($valor['codigo']) || isset($valor['registro']) || isset($valor['asunto'])) {
+                $planos[] = $valor;
+
+                continue;
+            }
+
+            // Clave de bandeja (`notificaciones`, `acciones_previas`): cada
+            // fila hereda la bandeja para poder pedir luego su documento.
+            foreach ($valor as $fila) {
+                if (! is_array($fila)) {
+                    continue;
+                }
+
+                $fila['bandeja'] = $fila['bandeja'] ?? $clave;
+                $planos[] = $fila;
+            }
+        }
+
+        return array_values($planos);
     }
 }

@@ -252,6 +252,25 @@ class NotificacionController extends Controller
 
         $ruta = $this->service->rutaAdjunto($notificacion);
 
+        // Si no hay archivo guardado se pide al puente en ese momento: así las
+        // constancias, que se bajan bajo demanda, no obligan a sincronizar
+        // todo el buzón para ver una.
+        if (! $ruta) {
+            $resultado = $this->service->descargarDocumento(
+                $notificacion,
+                (string) $request->query('tipo', 'carta')
+            );
+
+            if (! ($resultado['ok'] ?? false)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $resultado['message'] ?? 'La notificación no tiene adjunto',
+                ], 404);
+            }
+
+            $ruta = $this->service->rutaAdjunto($notificacion->refresh());
+        }
+
         if (! $ruta) {
             return response()->json([
                 'success' => false,
@@ -260,6 +279,43 @@ class NotificacionController extends Controller
         }
 
         return Storage::disk('public')->download($ruta);
+    }
+
+    /**
+     * Descarga bajo demanda el documento de una notificación del buzón.
+     *
+     * Es el camino de las constancias de SUNAFIL, que no se bajan al
+     * sincronizar porque no tienen plazo que responder.
+     */
+    public function descargarDocumento(Request $request, Notificacion $notificacion): JsonResponse
+    {
+        abort_if(
+            ! $request->user()?->canAccessCompany($notificacion->company_id),
+            403,
+            'No tienes acceso a esta empresa.'
+        );
+
+        $datos = $request->validate([
+            'tipo' => ['nullable', 'string', 'in:carta,constancia_deposito,constancia_acuse'],
+        ]);
+
+        $resultado = $this->service->descargarDocumento(
+            $notificacion,
+            $datos['tipo'] ?? 'carta'
+        );
+
+        if (! ($resultado['ok'] ?? false)) {
+            return response()->json([
+                'success' => false,
+                'message' => $resultado['message'] ?? 'No se pudo descargar el documento.',
+            ], 502);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $resultado,
+            'message' => 'Documento descargado.',
+        ]);
     }
 
     private function companyId(Request $request, ?int $companyId): int

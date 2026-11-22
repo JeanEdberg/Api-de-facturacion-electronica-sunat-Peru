@@ -1333,6 +1333,9 @@ def extraer_acciones_previas(html_casilla):
             datos["dias_habiles_restantes"] = _habiles_hasta(
                 datos.get("fecha_limite", "")
             )
+            # `/documento` identifica la fila por su posición en la tabla, no
+            # por el código: sin este índice no se puede pedir el archivo.
+            datos["indice"] = len(acciones)
             acciones.append(datos)
 
         if acciones:

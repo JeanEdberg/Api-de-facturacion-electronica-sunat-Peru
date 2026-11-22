@@ -483,3 +483,126 @@ test('el comando sunat:clave-sol no guarda una clave vacía', function () {
 
     expect($this->company->fresh()->clave_sol)->toBe($original);
 });
+
+test('aplana las bandejas de SUNAFIL y guarda bandeja e índice', function () {
+    config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
+
+    Http::fake([
+        'puente.test/buzon' => Http::response([
+            'notificaciones' => [
+                ['codigo' => 'N-1', 'asunto' => 'Resolución'],
+            ],
+            'acciones_previas' => [
+                ['registro' => '0000122241 - 2026', 'fecha_deposito' => '23/10/2026', 'indice' => 0],
+                ['registro' => '0000122242 - 2026', 'fecha_deposito' => '24/10/2026', 'indice' => 1],
+            ],
+        ]),
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/sincronizar', [
+            'company_id' => $this->company->id,
+            'entidad' => 'SUNAFIL',
+        ])
+        ->assertStatus(200)
+        ->assertJsonPath('data.importadas', 3);
+
+    // Antes el aplanado dejaba las dos listas y no sus filas: importaba 0.
+    expect(Notificacion::where('entidad', 'SUNAFIL')->count())->toBe(3);
+
+    $carta = Notificacion::where('codigo', '0000122242 - 2026')->first();
+    $detalle = json_decode($carta->detalle, true);
+
+    expect($detalle['bandeja'])->toBe('acciones_previas');
+    expect($detalle['indice'])->toBe(1);
+});
+
+test('baja la carta al sincronizar SUNAFIL y la deja adjunta', function () {
+    config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
+    Storage::fake('public');
+
+    Http::fake([
+        'puente.test/buzon' => Http::response([
+            'acciones_previas' => [
+                ['registro' => '0000122241 - 2026', 'fecha_deposito' => '23/10/2026', 'indice' => 0],
+            ],
+        ]),
+        'puente.test/documento' => Http::response('%PDF-1.4 carta', 200, ['Content-Type' => 'application/pdf']),
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson('/api/v1/notificaciones/sincronizar', [
+            'company_id' => $this->company->id,
+            'entidad' => 'SUNAFIL',
+        ])
+        ->assertStatus(200)
+        ->assertJsonPath('data.cartas_descargadas', 1);
+
+    $notificacion = Notificacion::firstOrFail();
+
+    expect($notificacion->tiene_adjunto)->toBeTrue();
+    Storage::disk('public')->assertExists($notificacion->adjunto_path);
+    expect(Storage::disk('public')->get($notificacion->adjunto_path))->toStartWith('%PDF');
+
+    // El puente necesita bandeja e índice: sin ellos bajaría otra fila.
+    Http::assertSent(function ($peticion) {
+        return str_ends_with($peticion->url(), '/documento')
+            && $peticion['bandeja'] === 'acciones_previas'
+            && $peticion['indice'] === 0
+            && $peticion['tipo'] === 'carta';
+    });
+});
+
+test('descarga una constancia bajo demanda y la sirve como adjunto', function () {
+    config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
+    Storage::fake('public');
+
+    Http::fake([
+        'puente.test/buzon' => Http::response(['acciones_previas' => []]),
+        'puente.test/documento' => Http::response('%PDF-1.4 acuse', 200, ['Content-Type' => 'application/pdf']),
+    ]);
+
+    $notificacion = Notificacion::create([
+        'company_id' => $this->company->id,
+        'entidad' => 'SUNAFIL',
+        'codigo' => '0000122241 - 2026',
+        'asunto' => 'Carta inductiva',
+        'detalle' => json_encode(['bandeja' => 'acciones_previas', 'indice' => 0]),
+        'origen' => 'sincronizada',
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/documento", [
+            'tipo' => 'constancia_acuse',
+        ])
+        ->assertStatus(200)
+        ->assertJsonPath('data.ok', true);
+
+    Http::assertSent(fn ($peticion) => str_ends_with($peticion->url(), '/documento')
+        && $peticion['tipo'] === 'constancia_acuse');
+
+    // Y el endpoint de adjunto ya la encuentra guardada.
+    $this->actingAs($this->user)
+        ->get("/api/v1/notificaciones/{$notificacion->id}/adjunto")
+        ->assertStatus(200);
+});
+
+test('no pide el documento si la notificación no dice de qué fila salió', function () {
+    config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
+    Http::fake();
+
+    $notificacion = Notificacion::create([
+        'company_id' => $this->company->id,
+        'entidad' => 'SUNAFIL',
+        'codigo' => 'X-1',
+        'asunto' => 'Sin origen',
+        'origen' => 'manual',
+    ]);
+
+    $this->actingAs($this->user)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/documento")
+        ->assertStatus(502)
+        ->assertJsonPath('success', false);
+
+    Http::assertNothingSent();
+});

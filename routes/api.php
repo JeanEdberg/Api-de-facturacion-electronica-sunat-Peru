@@ -210,6 +210,9 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/marcar-leida', [NotificacionController::class, 'marcarLeida']);
         Route::post('/{notificacion}/adjuntos', [NotificacionController::class, 'adjuntar']);
         Route::get('/{notificacion}/adjunto', [NotificacionController::class, 'descargarAdjunto']);
+        // Bajo demanda: pide el PDF al puente y lo guarda. Es el camino de las
+        // constancias, que no se bajan al sincronizar.
+        Route::post('/{notificacion}/documento', [NotificacionController::class, 'descargarDocumento']);
     });
 
     // ========================
