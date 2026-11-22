@@ -366,13 +366,16 @@ class NotificacionController extends Controller
             'No tienes acceso a esta empresa.'
         );
 
+        // Aquí NO se baja la carta: pedirla a la casilla registra el acuse y
+        // arranca el plazo legal, así que sólo se hace desde /abrir, con
+        // permiso y confirmación. Las constancias no tienen efecto legal.
         $datos = $request->validate([
-            'tipo' => ['nullable', 'string', 'in:carta,constancia_deposito,constancia_acuse'],
+            'tipo' => ['nullable', 'string', 'in:constancia_deposito,constancia_acuse'],
         ]);
 
         $resultado = $this->service->descargarDocumento(
             $notificacion,
-            $datos['tipo'] ?? 'carta'
+            $datos['tipo'] ?? 'constancia_acuse'
         );
 
         if (! ($resultado['ok'] ?? false)) {

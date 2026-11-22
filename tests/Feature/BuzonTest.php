@@ -784,3 +784,21 @@ test('el aviso de plazo aparece para las notificaciones sin acuse', function () 
         ->assertJsonPath('alertas.acuse.0.dias_restantes', 1)
         ->assertJsonPath('alertas.acuse.0.vencido', false);
 });
+
+test('el endpoint genérico de documentos no puede abrir la carta', function () {
+    Storage::fake('public');
+    config()->set('services.buzon.sunafil_endpoint', 'https://puente.test/buzon');
+    Http::fake();
+
+    $lector = usuarioConRol($this->company, 'read_only');
+    $notificacion = notificacionSunafil($this->company);
+
+    // `tipo=carta` era una puerta trasera: registraba el acuse sin Gate ni
+    // confirmación. Ahora ni siquiera es un valor aceptado.
+    $this->actingAs($lector)
+        ->postJson("/api/v1/notificaciones/{$notificacion->id}/documento", ['tipo' => 'carta'])
+        ->assertStatus(422);
+
+    Http::assertNothingSent();
+    expect($notificacion->refresh()->con_acuse)->toBeFalse();
+});
