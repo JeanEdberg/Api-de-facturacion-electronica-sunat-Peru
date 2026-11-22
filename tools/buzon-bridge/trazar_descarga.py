@@ -62,10 +62,13 @@ def _describe(contenido):
             f"form {ident.group(1) if ident else '?'}"
             f" -> action={accion.group(1) if accion else '(sin action)'}"
         )
+    # En HTML viene como campo oculto; en una respuesta AJAX, como `<update>`.
     estado = re.search(
         r"""name\s*=\s*["']javax\.faces\.ViewState["'][^>]*value\s*=\s*["']([^"']{0,24})""",
         texto,
         re.I,
+    ) or re.search(
+        r"""<update id="[^"]*ViewState[^"]*"><!\[CDATA\[([^\]]{0,24})""", texto, re.I
     )
     if estado:
         partes.append(f"ViewState={estado.group(1)}…")
@@ -183,6 +186,31 @@ def main():
 
     puente.Sesion = SesionTrazada
 
+    # La carta no usa los métodos de Sesion: `_enviar_documento` devuelve un
+    # `enviar()` que abre la petición a mano. Sin envolverlo, los pasos 4 y 5
+    # —los que de verdad fallan— no salían en la traza.
+    original_enviar = puente._enviar_documento
+
+    def enviar_documento_trazado(sesion, url_bandeja):
+        enviar = original_enviar(sesion, url_bandeja)
+
+        def enviar_trazado(url, campos, ajax=False):
+            etiqueta = "POST-AJAX (carta)" if ajax else "POST (carta)"
+            print(f"\n  {etiqueta} {url}")
+            for clave, valor in campos:
+                print(f"      {clave} = {_recorta(valor)}")
+            estado, cabeceras, cuerpo = enviar(url, campos, ajax)
+            print(f"      -> HTTP {estado}, {cabeceras.get('Content-Type', 'sin tipo')}, "
+                  f"{len(cuerpo)} bytes")
+            print(f"      -> {_describe(cuerpo)}")
+            ruta = _guardar("carta", cuerpo)
+            print(f"      -> guardado en {ruta}")
+            return estado, cabeceras, cuerpo
+
+        return enviar_trazado
+
+    puente._enviar_documento = enviar_documento_trazado
+
     try:
         nombre, contenido = puente.descargar_documento(
             ruc, usuario, clave, "Acciones Previas", 0, tipo
@@ -196,6 +224,7 @@ def main():
         return 1
     finally:
         puente.Sesion = original
+        puente._enviar_documento = original_enviar
 
     print("\n" + "=" * 70)
     print(f"OK: {nombre} ({len(contenido)} bytes)")
